@@ -110,6 +110,10 @@ private:
     Coord get_closest_unassigned_center(const Coord &drone_pos, const std::shared_ptr<ROBOT> &robot, const vector<vector<OBJECT>> &known_object_map);
     void assign_new_exploration_target(const shared_ptr<ROBOT> &robot,
                                        const vector<vector<OBJECT>> &known_object_map);
+
+    // Random movement helpers
+    Coord get_random_valid_neighbor(const Coord &current_pos, const vector<vector<OBJECT>> &known_object_map, int robot_id);
+    bool try_assign_random_move(const shared_ptr<ROBOT> &robot, const vector<vector<OBJECT>> &known_object_map);
 };
 
 #endif /* SCHEDULER_H_ */

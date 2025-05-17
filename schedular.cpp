@@ -32,7 +32,7 @@ Scheduler::Scheduler() : map_width_(0),
                          explore_complete_logged_(false),
                          re_explore_triggered_(false)
 {
-    // Initialize any other members if necessary
+    // srand(time(NULL)); // Consider adding for true randomness, ensure <ctime> is included
 }
 
 void Scheduler::initialize_scheduler_state(const vector<vector<OBJECT>> &known_object_map, const vector<shared_ptr<ROBOT>> &robots)
@@ -337,22 +337,8 @@ void Scheduler::assign_new_exploration_target(const shared_ptr<ROBOT> &robot,
 
     if (target_center.x != -1 && target_center.y != -1)
     {
-        // Path was already checked in get_closest_unassigned_center,
-        // but map state might have changed or that BFS was just for reachability.
-        // Re-finding path here is safer and ensures current robot's specific last_stuck_inducing_target_cell_ is considered if any.
-        // Coord const *cell_to_avoid_ptr = nullptr; // MODIFIED: Always nullptr for new target assignment
-        // if (last_stuck_inducing_target_cell_.count(robot->id))
-        // {
-        //     cell_to_avoid_ptr = &last_stuck_inducing_target_cell_.at(robot->id);
-        //     std::cout << "Robot " << robot->id << " [assign_new_exploration_target] Attempting BFS to new target (" << target_center.x << "," << target_center.y
-        //               << ") avoiding last stuck cell (" << cell_to_avoid_ptr->x << "," << cell_to_avoid_ptr->y << ")" << std::endl;
-        // }
-        // else
-        // {
-        std::cout << "Robot " << robot->id << " [assign_new_exploration_target] Attempting BFS to new target (" << target_center.x << "," << target_center.y << ") (no specific cell to avoid for new target)." << std::endl;
-        // }
-
-        std::vector<Coord> path = find_path_bfs(current_pos, target_center, known_object_map, nullptr); // MODIFIED: avoid_cell is nullptr
+        std::cout << "Robot " << robot->id << " [assign_new_exploration_target] get_closest found candidate (" << target_center.x << "," << target_center.y << "). Attempting BFS." << std::endl;
+        std::vector<Coord> path = find_path_bfs(current_pos, target_center, known_object_map, nullptr);
 
         if (!path.empty())
         {
@@ -362,25 +348,79 @@ void Scheduler::assign_new_exploration_target(const shared_ptr<ROBOT> &robot,
             target_fail_counts_[robot->id][target_center] = 0;
             if (last_stuck_inducing_target_cell_.count(robot->id))
             {
-                last_stuck_inducing_target_cell_.erase(robot->id); // Clear last stuck cell on new target
+                last_stuck_inducing_target_cell_.erase(robot->id);
                 std::cout << "Robot " << robot->id << " [assign_new_exploration_target] Cleared last_stuck_inducing_target_cell_ for new target (" << target_center.x << "," << target_center.y << ")." << std::endl;
             }
-
             waypoint_cache_[robot->id] = path;
-            if (path.size() > 1)
-                current_waypoint_idx_[robot->id] = 1;
-            else
-                current_waypoint_idx_[robot->id] = 0;
+            current_waypoint_idx_[robot->id] = (path.size() > 1) ? 1 : 0;
         }
         else
         {
-            std::cout << "Robot " << robot->id << " could NOT find initial BFS path to potential target (" << target_center.x << "," << target_center.y << "). Marking unreachable." << std::endl;
+            std::cout << "Robot " << robot->id << " could NOT find initial BFS path to initially chosen target (" << target_center.x << "," << target_center.y << "). Marking unreachable." << std::endl;
             unreachable_centers_.insert(target_center);
+            if (assigned_centers_.count(target_center))
+                assigned_centers_.erase(target_center); // Remove if it was optimistically assigned by another logic path
+
+            DroneState current_state = drone_states_[robot->id];
+            if (current_state == DroneState::EXPLORE || current_state == DroneState::REEXPLORE)
+            {
+                std::cout << "Robot " << robot->id << " path to center failed. Attempting random move. Current state: " << static_cast<int>(current_state) << std::endl;
+                try_assign_random_move(robot, known_object_map);
+            }
         }
     }
     else
     {
-        // std::cout << "Robot " << robot->id << " found no unassigned centers during target assignment attempt." << std::endl;
+        std::cout << "Robot " << robot->id << " [assign_new_exploration_target] get_closest_unassigned_center found no initial target. Trying last chance for unreachable centers." << std::endl;
+        bool found_by_last_chance = false;
+        Coord last_chance_target = {-1, -1};
+
+        // Create a temporary sorted list of virtual centers to check them in a consistent order (e.g. by distance)
+        std::vector<Coord> centers_to_recheck = virtual_centers_;
+        std::sort(centers_to_recheck.begin(), centers_to_recheck.end(), [&](const Coord &a, const Coord &b)
+                  { return manhattan_distance(current_pos, a) < manhattan_distance(current_pos, b); });
+
+        for (const auto &vc : centers_to_recheck)
+        { // Iterate over sorted list
+            if (unreachable_centers_.count(vc) && !visited_centers_.count(vc) && !assigned_centers_.count(vc))
+            {
+                // std::cout << "Robot " << robot->id << " [LastChance] Trying BFS to previously unreachable center (" << vc.x << "," << vc.y << ")" << std::endl;
+                std::vector<Coord> path_last_chance = find_path_bfs(current_pos, vc, known_object_map, nullptr);
+                if (!path_last_chance.empty())
+                {
+                    std::cout << "Robot " << robot->id << " [LastChance] Path FOUND to (" << vc.x << "," << vc.y << "). Was unreachable." << std::endl;
+                    last_chance_target = vc;
+                    unreachable_centers_.erase(vc);
+
+                    drone_target_centers_[robot->id] = last_chance_target;
+                    assigned_centers_.insert(last_chance_target);
+                    target_fail_counts_[robot->id][last_chance_target] = 0;
+                    if (last_stuck_inducing_target_cell_.count(robot->id))
+                    {
+                        last_stuck_inducing_target_cell_.erase(robot->id);
+                    }
+                    waypoint_cache_[robot->id] = path_last_chance;
+                    current_waypoint_idx_[robot->id] = (path_last_chance.size() > 1) ? 1 : 0;
+
+                    found_by_last_chance = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found_by_last_chance)
+        {
+            DroneState current_state = drone_states_[robot->id];
+            if (current_state == DroneState::EXPLORE || current_state == DroneState::REEXPLORE)
+            {
+                std::cout << "Robot " << robot->id << " found no unassigned centers (even after last chance). Attempting random move. Current state: " << static_cast<int>(current_state) << std::endl;
+                try_assign_random_move(robot, known_object_map);
+            }
+            else
+            {
+                // std::cout << "Robot " << robot->id << " found no unassigned centers and not in EXPLORE/REEXPLORE. State: " << static_cast<int>(current_state) << std::endl;
+            }
+        }
     }
 }
 
@@ -685,20 +725,26 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     // This check should be done for initial_explore_phase_complete_by_centers_
     if (!initial_explore_phase_complete_by_centers_ && initial_map_setup_done_ && !virtual_centers_.empty())
     {
-        bool all_centers_accounted_for = true;
-        for (const auto &center : virtual_centers_)
+        bool all_centers_actually_visited = true;
+        if (virtual_centers_.empty())
+        { // Should ideally not happen if map is valid and centers generated
+            all_centers_actually_visited = true;
+        }
+        else
         {
-            // A center is accounted for if it's visited OR marked as unreachable.
-            if (!visited_centers_.count(center) && !unreachable_centers_.count(center))
+            for (const auto &center : virtual_centers_)
             {
-                all_centers_accounted_for = false;
-                break;
+                if (visited_centers_.find(center) == visited_centers_.end())
+                { // NEW LOGIC: Must be in visited_centers_
+                    all_centers_actually_visited = false;
+                    break;
+                }
             }
         }
 
-        if (all_centers_accounted_for)
+        if (all_centers_actually_visited)
         {
-            std::cout << "Tick " << current_tick_ << ": All virtual centers are now either visited or marked unreachable. Initial exploration by centers complete." << std::endl;
+            std::cout << "Tick " << current_tick_ << ": All " << virtual_centers_.size() << " virtual centers have been VISITED. Initial exploration by centers complete." << std::endl;
             initial_explore_phase_complete_by_centers_ = true;
             // Drones in EXPLORE state will transition to WAIT_TASKS in their next FSM cycle.
         }
@@ -1063,4 +1109,93 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
     previous_pos_map_[robot_id] = current_pos_this_tick;
     last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
     return ROBOT::ACTION::HOLD;
+}
+
+// Random Movement Helper Implementations
+Coord Scheduler::get_random_valid_neighbor(const Coord &current_pos, const vector<vector<OBJECT>> &known_object_map, int robot_id)
+{
+    std::vector<Coord> neighbors;
+    // Scheduler's perspective: UP is Y--, DOWN is Y++ for map indexing
+    // But for robot actions, UP decreases Y, DOWN increases Y.
+    // The dr, dc arrays here are for direct map array indexing if needed,
+    // but is_valid_and_not_wall takes (r, c) which means (y, x).
+
+    // Order: UP, DOWN, LEFT, RIGHT (relative to 'visual' map or typical Cartesian if Y is up)
+    // Action UP   => dy = -1 (if Y increases downwards, this is moving to smaller Y)
+    // Action DOWN => dy = +1
+    // Action LEFT => dx = -1
+    // Action RIGHT=> dx = +1
+
+    Coord candidates[4] = {
+        {current_pos.x, current_pos.y - 1}, // UP
+        {current_pos.x, current_pos.y + 1}, // DOWN
+        {current_pos.x - 1, current_pos.y}, // LEFT
+        {current_pos.x + 1, current_pos.y}  // RIGHT
+    };
+
+    for (const auto &cand_coord : candidates)
+    {
+        if (is_valid_and_not_wall(cand_coord.y, cand_coord.x, known_object_map))
+        {
+            neighbors.push_back(cand_coord);
+        }
+    }
+
+    if (!neighbors.empty())
+    {
+        // Filter out the previous position if multiple options are available and it's not the only option
+        if (neighbors.size() > 1 && previous_pos_map_.count(robot_id))
+        {
+            Coord prev_pos = previous_pos_map_[robot_id];
+            auto it = std::remove_if(neighbors.begin(), neighbors.end(),
+                                     [&](const Coord &c)
+                                     { return c == prev_pos; });
+            if (it != neighbors.begin())
+            { // if prev_pos was found and removed, and list is not empty now
+                neighbors.erase(it, neighbors.end());
+            }
+            if (neighbors.empty())
+            { // if removing previous pos made it empty, revert (i.e. allow moving back if only option)
+                for (const auto &cand_coord : candidates)
+                { // Re-populate
+                    if (is_valid_and_not_wall(cand_coord.y, cand_coord.x, known_object_map))
+                    {
+                        neighbors.push_back(cand_coord);
+                    }
+                }
+            }
+        }
+        return neighbors[rand() % neighbors.size()];
+    }
+    return {-1, -1}; // No valid neighbor
+}
+
+bool Scheduler::try_assign_random_move(const shared_ptr<ROBOT> &robot, const vector<vector<OBJECT>> &known_object_map)
+{
+    Coord robot_current_pos = robot->get_coord(); // Get current position for path start
+    Coord random_neighbor = get_random_valid_neighbor(robot_current_pos, known_object_map, robot->id);
+
+    if (random_neighbor.x != -1 && random_neighbor.y != -1)
+    {
+        std::cout << "Robot " << robot->id << " [RandomMove]: Assigning random move from ("
+                  << robot_current_pos.x << "," << robot_current_pos.y << ") to ("
+                  << random_neighbor.x << "," << random_neighbor.y << ")" << std::endl;
+
+        // Create a path of two points: current location and the random neighbor.
+        // The current location is idx 0, neighbor is idx 1.
+        // idle_action expects to move towards path[current_waypoint_idx_]
+        waypoint_cache_[robot->id] = {robot_current_pos, random_neighbor};
+        current_waypoint_idx_[robot->id] = 1; // Set index to 1 to target the random_neighbor
+
+        drone_target_centers_.erase(robot->id); // Clear any high-level center target
+        if (last_stuck_inducing_target_cell_.count(robot->id))
+        { // Clear stuck cell if we resort to random
+            last_stuck_inducing_target_cell_.erase(robot->id);
+            std::cout << "Robot " << robot->id << " [RandomMove]: Cleared last_stuck_inducing_target_cell_." << std::endl;
+        }
+        return true;
+    }
+    std::cout << "Robot " << robot->id << " [RandomMove]: Could not find a valid random neighbor from ("
+              << robot_current_pos.x << "," << robot_current_pos.y << ")." << std::endl;
+    return false;
 }
