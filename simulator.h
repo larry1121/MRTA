@@ -1,7 +1,7 @@
 #ifndef SIMULATER_H_
 #define SIMULATER_H_
 
-//#define VERBOSE
+// #define VERBOSE
 
 #include <iostream>
 #include <vector>
