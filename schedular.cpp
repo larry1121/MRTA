@@ -74,18 +74,18 @@ void Scheduler::update_map_knowledge(const vector<vector<OBJECT>> &known_object_
         // Check if map dimensions match internal state, though map_width_ and map_height_ should be set by now.
         if (h != map_height_ || w != map_width_)
         {
-            std::cout << "[UpdateMapWarn Tick: " << current_tick_ << "] Mismatch! Internal H:" << map_height_ << " W:" << map_width_
-                      << ", Received H:" << h << " W:" << w << std::endl;
+            // std::cout << "[UpdateMapWarn Tick: " << current_tick_ << "] Mismatch! Internal H:" << map_height_ << " W:" << map_width_
+            //           << ", Received H:" << h << " W:" << w << std::endl;
         }
         if (map_height_ > 10 && map_width_ > 10)
         { // Use internal map_height_ and map_width_ for safety
-            std::cout << "[UpdateMap_Debug Tick: " << current_tick_ << "] Using map for known_ratio. Cell (6,5) obj: " << static_cast<int>(known_object_map[5][6])
-                      << ", Cell (6,10) obj: " << static_cast<int>(known_object_map[10][6]) << std::endl;
+          // std::cout << "[UpdateMap_Debug Tick: " << current_tick_ << "] Using map for known_ratio. Cell (6,5) obj: " << static_cast<int>(known_object_map[5][6])
+          //           << ", Cell (6,10) obj: " << static_cast<int>(known_object_map[10][6]) << std::endl;
         }
     }
     else
     {
-        std::cout << "[UpdateMap_Debug Tick: " << current_tick_ << "] empty known_object_map in update_map_knowledge." << std::endl;
+        // std::cout << "[UpdateMap_Debug Tick: " << current_tick_ << "] empty known_object_map in update_map_knowledge." << std::endl;
         return; // Cant process if map is empty
     }
 
@@ -121,7 +121,7 @@ void Scheduler::generate_virtual_centers_grid()
             virtual_centers_.push_back({c, r}); // Coord is {x, y}
         }
     }
-    std::cout << "Generated " << virtual_centers_.size() << " virtual centers with gap " << gap << std::endl;
+    // std::cout << "Generated " << virtual_centers_.size() << " virtual centers with gap " << gap << std::endl;
 
     // Simple sort: top-to-bottom, left-to-right. Spiral sort is more complex.
     // For now, we'll let drones pick the closest unassigned.
@@ -167,7 +167,7 @@ void Scheduler::sort_centers_for_spiral_path(std::vector<Coord> &centers)
                   // The "pick nearest unvisited" might be the dominant strategy.
                   return angle_a < angle_b; // Needs refinement for true clockwise.
               });
-    std::cout << "Virtual centers sorted (partially for spiral)." << std::endl;
+    // std::cout << "Virtual centers sorted (partially for spiral)." << std::endl;
 }
 
 // Pathfinding Member function implementation
@@ -175,25 +175,26 @@ bool Scheduler::is_valid_and_not_wall(int r, int c, const std::vector<std::vecto
 {
     if (locally_discovered_walls_.count({c, r}))
     { // Coord is {x,y} so {c,r} for set lookup
-        std::cout << "[SchedulerDebug] Cell (" << c << "," << r << ") is in locally_discovered_walls_." << std::endl;
+        // std::cout << "[SchedulerDebug] Cell (" << c << "," << r << ") is in locally_discovered_walls_." << std::endl;
         return false;
     }
     return r >= 0 && r < map_height_ && c >= 0 && c < map_width_ && known_map[r][c] != OBJECT::WALL;
 }
 
 std::vector<Coord> Scheduler::find_path_bfs(const Coord &start, const Coord &goal,
-                                            const vector<vector<OBJECT>> &known_object_map)
+                                            const vector<vector<OBJECT>> &known_object_map,
+                                            const Coord *avoid_cell)
 {
     std::vector<Coord> path;
     // Check if start or goal is invalid or a wall initially
     if (!is_valid_and_not_wall(start.y, start.x, known_object_map))
     {
-        std::cout << "[BFS_Debug] Start position (" << start.x << "," << start.y << ") is invalid or a wall. No path." << std::endl;
+        // std::cout << "[BFS_Debug] Start position (" << start.x << "," << start.y << ") is invalid or a wall. No path." << std::endl;
         return {};
     }
     if (!is_valid_and_not_wall(goal.y, goal.x, known_object_map))
     {
-        std::cout << "[BFS_Debug] Goal position (" << goal.x << "," << goal.y << ") is invalid or a wall. No path." << std::endl;
+        // std::cout << "[BFS_Debug] Goal position (" << goal.x << "," << goal.y << ") is invalid or a wall. No path." << std::endl;
         return {};
     }
 
@@ -233,6 +234,11 @@ std::vector<Coord> Scheduler::find_path_bfs(const Coord &start, const Coord &goa
             if (is_valid_and_not_wall(next_r, next_c, known_object_map) &&
                 visited_bfs.find(next_coord) == visited_bfs.end())
             {
+                if (avoid_cell && next_coord == *avoid_cell && next_coord != goal) // Modified condition
+                {                                                                  // Check if next_coord is the cell to avoid, but not if it's the goal itself
+                    // std::cout << "[BFS_Debug] Robot Unknown: Avoiding recently stuck cell: (" << next_coord.x << "," << next_coord.y << ") for goal (" << goal.x << "," << goal.y << ")" << std::endl;
+                    continue; // Skip this cell, don't add to path or queue
+                }
 
                 visited_bfs.insert(next_coord);
                 std::vector<Coord> new_path = current_path;
@@ -261,34 +267,63 @@ Coord Scheduler::get_closest_unassigned_center(const Coord &drone_pos, const std
 {
     Coord best_target = {-1, -1};
     int min_dist = std::numeric_limits<int>::max();
+    std::vector<Coord> centers_to_evaluate = virtual_centers_; // Create a copy to iterate
 
-    for (const auto &center : virtual_centers_)
+    // Optional: Sort centers_to_evaluate by distance to drone_pos first for potentially faster finding
+    std::sort(centers_to_evaluate.begin(), centers_to_evaluate.end(),
+              [&](const Coord &a, const Coord &b)
+              {
+                  return manhattan_distance(drone_pos, a) < manhattan_distance(drone_pos, b);
+              });
+
+    for (const auto &center : centers_to_evaluate)
     {
         if (visited_centers_.count(center) || assigned_centers_.count(center) || unreachable_centers_.count(center))
         {
             continue;
         }
 
-        // Check if the center itself is a wall or locally discovered wall
         if (!is_valid_and_not_wall(center.y, center.x, known_object_map))
         {
-            // std::cout << "[CenterCheck] Center (" << center.x << "," << center.y << ") is a wall or locally discovered wall. Skipping." << std::endl;
+            // std::cout << "[CenterCheck] Center (" << center.x << "," << center.y << ") is a wall or locally discovered wall. Marking unreachable." << std::endl;
+            unreachable_centers_.insert(center); // Mark as unreachable if the center itself is invalid
             continue;
         }
 
-        int dist = manhattan_distance(drone_pos, center);
-        if (dist < min_dist)
+        // Perform BFS check here
+        std::vector<Coord> path_to_center = find_path_bfs(drone_pos, center, known_object_map, nullptr);
+
+        if (path_to_center.empty())
         {
-            min_dist = dist;
+            // std::cout << "[CenterCheck] Robot " << robot->id << " could NOT find path to potential center (" << center.x << "," << center.y << ") in get_closest. Marking unreachable." << std::endl;
+            unreachable_centers_.insert(center);
+            continue; // Try next center
+        }
+
+        // If path exists, this center is a candidate.
+        // We are looking for the closest one based on initial Manhattan distance.
+        // The sort above helps find a valid one faster, but we still need to ensure it's the *overall* closest among valid ones.
+        // For simplicity with the current loop structure (already sorted by distance),
+        // the first one we find a path to will be the best_target.
+        // To be absolutely sure it's the closest *overall* even if an earlier (closer by manhattan) center had its path check fail,
+        // we would need to iterate all, check paths for all non-unreachable, then pick.
+        // However, the current requirement is "nearest unvisited", sorting helps.
+
+        int dist = manhattan_distance(drone_pos, center); // Re-calculate or use sorted order
+        if (dist < min_dist)                              // This logic is somewhat redundant if we take the first valid from sorted list
+        {
+            // This check is to ensure we are picking the closest if the list wasn't pre-sorted by distance for the BFS check.
+            // Since we did sort, the first `center` that passes all checks (visited, assigned, unreachable, wall, path_exists)
+            // should be our best candidate.
+            min_dist = dist; // Not strictly needed if taking the first valid from sorted list
             best_target = center;
+            // std::cout << "[CenterCheck] Robot " << robot->id << " found potential valid target (" << center.x << "," << center.y << ") with dist " << dist << std::endl;
+            return best_target; // Found the closest (due to pre-sort) valid center, return it.
         }
     }
-
-    if (best_target.x != -1)
-    { // Found a target
-      // assigned_centers_.insert(best_target); // Assign it when path is confirmed or drone starts moving
-    }
-    return best_target;
+    // If loop finishes, best_target might still be {-1,-1} or the last one that met criteria if not returning early.
+    // If we exit the loop because all centers were checked and no suitable one was found after pre-sorting and BFS checks
+    return best_target; // Could be {-1,-1} if no center is reachable or suitable
 }
 
 void Scheduler::assign_new_exploration_target(const shared_ptr<ROBOT> &robot,
@@ -302,38 +337,55 @@ void Scheduler::assign_new_exploration_target(const shared_ptr<ROBOT> &robot,
 
     if (target_center.x != -1 && target_center.y != -1)
     {
-        std::cout << "Robot " << robot->id << " new exploration target: (" << target_center.x << "," << target_center.y << ")" << std::endl;
-        drone_target_centers_[robot->id] = target_center;
-        assigned_centers_.insert(target_center); // Mark as assigned
+        // Path was already checked in get_closest_unassigned_center,
+        // but map state might have changed or that BFS was just for reachability.
+        // Re-finding path here is safer and ensures current robot's specific last_stuck_inducing_target_cell_ is considered if any.
+        // Coord const *cell_to_avoid_ptr = nullptr; // MODIFIED: Always nullptr for new target assignment
+        // if (last_stuck_inducing_target_cell_.count(robot->id))
+        // {
+        //     cell_to_avoid_ptr = &last_stuck_inducing_target_cell_.at(robot->id);
+        //     std::cout << "Robot " << robot->id << " [assign_new_exploration_target] Attempting BFS to new target (" << target_center.x << "," << target_center.y
+        //               << ") avoiding last stuck cell (" << cell_to_avoid_ptr->x << "," << cell_to_avoid_ptr->y << ")" << std::endl;
+        // }
+        // else
+        // {
+        std::cout << "Robot " << robot->id << " [assign_new_exploration_target] Attempting BFS to new target (" << target_center.x << "," << target_center.y << ") (no specific cell to avoid for new target)." << std::endl;
+        // }
 
-        std::vector<Coord> path = find_path_bfs(current_pos, target_center, known_object_map);
+        std::vector<Coord> path = find_path_bfs(current_pos, target_center, known_object_map, nullptr); // MODIFIED: avoid_cell is nullptr
+
         if (!path.empty())
         {
+            std::cout << "Robot " << robot->id << " new exploration target: (" << target_center.x << "," << target_center.y << ") - Path FOUND." << std::endl;
+            drone_target_centers_[robot->id] = target_center;
+            assigned_centers_.insert(target_center);
+            target_fail_counts_[robot->id][target_center] = 0;
+            if (last_stuck_inducing_target_cell_.count(robot->id))
+            {
+                last_stuck_inducing_target_cell_.erase(robot->id); // Clear last stuck cell on new target
+                std::cout << "Robot " << robot->id << " [assign_new_exploration_target] Cleared last_stuck_inducing_target_cell_ for new target (" << target_center.x << "," << target_center.y << ")." << std::endl;
+            }
+
             waypoint_cache_[robot->id] = path;
             if (path.size() > 1)
-                current_waypoint_idx_[robot->id] = 1; // BFS path usually includes start, so skip current pos
+                current_waypoint_idx_[robot->id] = 1;
             else
-                current_waypoint_idx_[robot->id] = 0; // Path is just the target itself or empty after this check
+                current_waypoint_idx_[robot->id] = 0;
         }
         else
         {
-            std::cout << "Robot " << robot->id << " could not find path to (" << target_center.x << "," << target_center.y << ")" << std::endl;
-            assigned_centers_.erase(target_center);
-            unreachable_centers_.insert(target_center); // Add to unreachable set
-            std::cout << "Robot " << robot->id << " added (" << target_center.x << "," << target_center.y << ") to unreachable_centers_." << std::endl;
-            drone_target_centers_.erase(robot->id);
+            std::cout << "Robot " << robot->id << " could NOT find initial BFS path to potential target (" << target_center.x << "," << target_center.y << "). Marking unreachable." << std::endl;
+            unreachable_centers_.insert(target_center);
         }
     }
     else
     {
-        std::cout << "Robot " << robot->id << " found no unassigned centers." << std::endl;
-        // No more centers to explore for this drone, based on current logic
-        // FSM should handle transition to WAIT_TASKS or HOLD
+        // std::cout << "Robot " << robot->id << " found no unassigned centers during target assignment attempt." << std::endl;
     }
 }
 
 void Scheduler::handle_drone_fsm(const shared_ptr<ROBOT> &robot,
-                                 const vector<vector<vector<int>>> &known_cost_map, // Not used due to uniform cost
+                                 const vector<vector<vector<int>>> &known_cost_map,
                                  const vector<vector<OBJECT>> &known_object_map)
 {
     if (robot->type != ROBOT::TYPE::DRONE)
@@ -341,105 +393,225 @@ void Scheduler::handle_drone_fsm(const shared_ptr<ROBOT> &robot,
 
     DroneState &current_state = drone_states_[robot->id];
     Coord robot_pos = robot->get_coord();
+    int robot_id = robot->id;
 
     // State Transitions
-    if (current_state == DroneState::EXPLORE || current_state == DroneState::REEXPLORE)
+    if (current_state == DroneState::EXPLORE)
     {
-        if (known_ratio_ >= EXPLORATION_GOAL_RATIO)
+        if (initial_explore_phase_complete_by_centers_)
         {
-            if (!explore_complete_logged_ && current_state == DroneState::EXPLORE) // Log for initial EXPLORE
+            std::cout << "Robot " << robot_id << " (EXPLORE): Initial explore by centers complete." << std::endl;
+            if (current_tick_ < REEXPLORE_TICK_THRESHOLD)
             {
-                std::cout << "EXPLORE_COMPLETE at tick " << current_tick_ << " with known ratio " << known_ratio_ * 100 << "%" << std::endl;
-                explore_complete_logged_ = true;
+                current_state = DroneState::WAIT_TASKS;
+                std::cout << "Robot " << robot_id << " transitioning from EXPLORE to WAIT_TASKS (centers met)" << std::endl;
             }
-            // explore_complete_logged_ is reset to false by on_info_updated when re_explore_triggered_ becomes true
-            if (!explore_complete_logged_ && current_state == DroneState::REEXPLORE && re_explore_triggered_)
+            else
             {
-                std::cout << "RE-EXPLORE_COMPLETE at tick " << current_tick_ << " with known ratio " << known_ratio_ * 100 << "%" << std::endl;
-                explore_complete_logged_ = true; // Mark as logged for this re-explore phase
+                // Will be caught by global re-explore trigger if time is up
+                std::cout << "Robot " << robot_id << " (EXPLORE): Centers met, but REEXPLORE_TICK_THRESHOLD reached/passed. Awaiting global REEXPLORE." << std::endl;
             }
-
-            // Transition logic based on achieving exploration goal
-            if (current_state == DroneState::EXPLORE)
+            waypoint_cache_.erase(robot_id);
+            drone_target_centers_.erase(robot_id); // Clear target as phase is done
+            // target_fail_counts_ for this robot might need clearing or handling if it re-enters EXPLORE
+            last_stuck_inducing_target_cell_.erase(robot_id); // Clear on phase change
+        }
+    }
+    else if (current_state == DroneState::REEXPLORE)
+    {
+        if (known_ratio_ >= EXPLORATION_GOAL_RATIO && re_explore_triggered_)
+        { // Check re_explore_triggered_ to ensure it's this phase
+            if (!explore_complete_logged_)
+            { // Log only once per re-explore phase
+                std::cout << "RE-EXPLORE_COMPLETE for Robot " << robot_id << " at tick " << current_tick_ << " with known ratio " << known_ratio_ * 100 << "%" << std::endl;
+                explore_complete_logged_ = true; // Mark as logged for this robot/phase
+            }
+            current_state = DroneState::HOLD;
+            std::cout << "Robot " << robot_id << " transitioning from REEXPLORE to HOLD" << std::endl;
+            waypoint_cache_.erase(robot_id);
+            drone_target_centers_.erase(robot_id);
+            if (last_stuck_inducing_target_cell_.count(robot_id))
             {
-                if (current_tick_ < REEXPLORE_TICK_THRESHOLD)
-                {
-                    current_state = DroneState::WAIT_TASKS;
-                    std::cout << "Robot " << robot->id << " transitioning from EXPLORE to WAIT_TASKS" << std::endl;
-                    waypoint_cache_.erase(robot->id);
-                    drone_target_centers_.erase(robot->id);
-                }
-                else
-                {
-                    // If EXPLORE goal is met and current_tick_ >= REEXPLORE_TICK_THRESHOLD,
-                    // on_info_updated handles the global transition to REEXPLORE state for all drones.
-                    // This drone will then adopt the REEXPLORE state in the next FSM cycle via on_info_updated.
-                    // No direct state change to REEXPLORE here; rely on the global mechanism.
-                    // It effectively means EXPLORE phase is done and it will switch to REEXPLORE.
-                }
-            }
-            else if (current_state == DroneState::REEXPLORE)
-            { // REEXPLORE goal met
-                current_state = DroneState::HOLD;
-                std::cout << "Robot " << robot->id << " transitioning from REEXPLORE to HOLD" << std::endl;
-                waypoint_cache_.erase(robot->id);
-                drone_target_centers_.erase(robot->id);
+                last_stuck_inducing_target_cell_.erase(robot_id); // Clear on phase change
+                std::cout << "Robot " << robot_id << " [FSM] REEXPLORE->HOLD: Cleared last_stuck_inducing_target_cell_." << std::endl;
             }
         }
     }
-
-    // The global re-exploration trigger (setting states to REEXPLORE for all drones
-    // and setting re_explore_triggered_ = true) is handled in on_info_updated.
-    // handle_drone_fsm acts based on the state set by on_info_updated.
+    // Global re-exploration trigger in on_info_updated handles setting all drones to REEXPLORE.
+    // Here, individual drones act based on that state.
 
     // Actions within States
     switch (current_state)
     {
     case DroneState::EXPLORE:
     case DroneState::REEXPLORE:
-        // If robot is idle (not moving towards a waypoint_cache target) or has no target center
+        // If initial explore by centers is complete for EXPLORE state, FSM transition above handles it.
+        // So, if we are here in EXPLORE state, it means initial_explore_phase_complete_by_centers_ is false.
+
         if (robot->get_status() == ROBOT::STATUS::IDLE)
         {
-            bool has_target_center = drone_target_centers_.count(robot->id);
-            bool path_finished = !waypoint_cache_.count(robot->id) ||
-                                 current_waypoint_idx_[robot->id] >= waypoint_cache_[robot->id].size();
+            bool has_target_center = drone_target_centers_.count(robot_id);
+            bool path_is_valid = waypoint_cache_.count(robot_id) &&
+                                 current_waypoint_idx_[robot_id] < waypoint_cache_[robot_id].size();
 
-            if (has_target_center && robot_pos == drone_target_centers_[robot->id])
+            if (has_target_center && robot_pos == drone_target_centers_.at(robot_id))
             { // Reached the high-level center
-                std::cout << "Robot " << robot->id << " reached center: (" << robot_pos.x << "," << robot_pos.y << ")" << std::endl;
+                std::cout << "Robot " << robot_id << " reached center: (" << robot_pos.x << "," << robot_pos.y << ")" << std::endl;
                 visited_centers_.insert(robot_pos);
-                assigned_centers_.erase(robot_pos); // Unassign as it's now visited
-                drone_target_centers_.erase(robot->id);
-                waypoint_cache_.erase(robot->id);
-                current_waypoint_idx_[robot->id] = 0;
-                assign_new_exploration_target(robot, known_object_map); // Get next one
-            }
-            else if (path_finished || !has_target_center)
-            { // Path finished or no center assigned
-                // If path finished but not at target center (e.g. path was empty), or no target at all
-                if (has_target_center && drone_target_centers_[robot->id] != robot_pos && path_finished)
+                assigned_centers_.erase(robot_pos);
+                drone_target_centers_.erase(robot_id);
+                waypoint_cache_.erase(robot_id);
+                current_waypoint_idx_.erase(robot_id);
+                target_fail_counts_[robot_id].erase(robot_pos); // Clear fail count for this now-visited center
+                if (last_stuck_inducing_target_cell_.count(robot_id))
                 {
-                    // This case implies it had a target, path is done, but not at target.
-                    // This might happen if path was short or target was current pos.
-                    // Or if path calculation failed earlier and it's trying to re-evaluate.
-                    std::cout << "Robot " << robot->id << " path finished, but not at center. Re-evaluating." << std::endl;
-                    // It should have been marked visited if at target. If not, re-assign.
-                    visited_centers_.insert(drone_target_centers_[robot->id]); // Assume it was reached if path is done.
-                    assigned_centers_.erase(drone_target_centers_[robot->id]);
-                    drone_target_centers_.erase(robot->id);
+                    last_stuck_inducing_target_cell_.erase(robot_id); // Clear on reaching target
+                    std::cout << "Robot " << robot_id << " [FSM] Reached center (" << robot_pos.x << "," << robot_pos.y << "): Cleared last_stuck_inducing_target_cell_." << std::endl;
                 }
+
+                // Check if EXPLORE phase should end before assigning new target
+                if (current_state == DroneState::EXPLORE && initial_explore_phase_complete_by_centers_)
+                {
+                    // This check is a bit redundant if FSM transition logic above is robust, but good for safety
+                    // FSM transition should already have moved to WAIT_TASKS or HOLD
+                    std::cout << "Robot " << robot_id << " (FSM): Reached center, initial explore by centers already marked complete. Not assigning new target." << std::endl;
+                }
+                else
+                {
+                    assign_new_exploration_target(robot, known_object_map);
+                }
+            }
+            else if (!has_target_center && !(current_state == DroneState::EXPLORE && initial_explore_phase_complete_by_centers_))
+            {
+                // No target center, and (if in EXPLORE state) the center-based exploration is not yet complete.
                 assign_new_exploration_target(robot, known_object_map);
             }
-            // If it has a target and a path, idle_action will handle movement.
+            else if (has_target_center && !path_is_valid)
+            {
+                // Has a target, but no valid path (e.g., path cleared by idle_action due to wall, or BFS failed previously)
+                Coord current_target = drone_target_centers_.at(robot_id);
+
+                // ADDED CHECK: If the target itself is invalid, mark unreachable immediately.
+                if (!is_valid_and_not_wall(current_target.y, current_target.x, known_object_map))
+                {
+                    std::cout << "Robot " << robot_id << " [FSM]: Current target (" << current_target.x << "," << current_target.y
+                              << ") is a wall or locally discovered obstacle. Marking unreachable directly." << std::endl;
+                    if (assigned_centers_.count(current_target))
+                    { // Check if it exists before erasing
+                        assigned_centers_.erase(current_target);
+                    }
+                    unreachable_centers_.insert(current_target);
+                    drone_target_centers_.erase(robot_id); // Clear this robot's target
+
+                    if (target_fail_counts_.count(robot_id) && target_fail_counts_.at(robot_id).count(current_target))
+                    {
+                        target_fail_counts_.at(robot_id).erase(current_target); // Clear fail counts for this target
+                    }
+
+                    if (last_stuck_inducing_target_cell_.count(robot_id))
+                    {
+                        // If the robot was stuck trying to reach this now-invalid target, clear the stuck cell info.
+                        // This is a general clear, as the target itself is the problem.
+                        if (last_stuck_inducing_target_cell_.at(robot_id) == current_target)
+                        {
+                            std::cout << "Robot " << robot_id << " [FSM] Target (" << current_target.x << "," << current_target.y
+                                      << ") is wall and was the last_stuck_inducing_target_cell_. Clearing." << std::endl;
+                        }
+                        else
+                        {
+                            std::cout << "Robot " << robot_id << " [FSM] Target (" << current_target.x << "," << current_target.y
+                                      << ") is wall. Clearing potentially related last_stuck_inducing_target_cell_." << std::endl;
+                        }
+                        last_stuck_inducing_target_cell_.erase(robot_id);
+                    }
+                    // The FSM will attempt to assign a new target in the current or next cycle if state is EXPLORE/REEXPLORE
+                }
+                else // Target cell itself IS valid, proceed with trying to find a path
+                {
+                    std::cout << "Robot " << robot_id << " [FSM]: Has target (" << current_target.x << "," << current_target.y << "), but no valid path. Attempting BFS." << std::endl;
+
+                    Coord const *cell_to_avoid_ptr_fsm = nullptr;
+                    if (last_stuck_inducing_target_cell_.count(robot_id))
+                    {
+                        cell_to_avoid_ptr_fsm = &last_stuck_inducing_target_cell_.at(robot_id);
+                        std::cout << "Robot " << robot_id << " [FSM] Attempting BFS to (" << current_target.x << "," << current_target.y
+                                  << ") avoiding last stuck cell (" << cell_to_avoid_ptr_fsm->x << "," << cell_to_avoid_ptr_fsm->y << ")" << std::endl;
+                    }
+                    // else
+                    // {
+                    //     // std::cout << "Robot " << robot_id << " [FSM] Attempting BFS to (" << current_target.x << "," << current_target.y << ") (no specific cell to avoid)." << std::endl;
+                    // }
+                    std::vector<Coord> path = find_path_bfs(robot_pos, current_target, known_object_map, cell_to_avoid_ptr_fsm);
+
+                    if (!path.empty()) // Path found and it inherently avoided the stuck cell if one was provided to BFS
+                    {
+                        waypoint_cache_[robot_id] = path;
+                        if (path.size() > 1)
+                            current_waypoint_idx_[robot_id] = 1;
+                        else
+                            current_waypoint_idx_[robot_id] = 0;
+                        std::cout << "Robot " << robot_id << " [FSM]: Path to (" << current_target.x << "," << current_target.y << ") FOUND (avoided stuck if applicable)." << std::endl;
+                        if (last_stuck_inducing_target_cell_.count(robot_id))
+                        {
+                            last_stuck_inducing_target_cell_.erase(robot_id);
+                            std::cout << "Robot " << robot_id << " [FSM] Path found, BFS already avoided stuck: Cleared last_stuck_inducing_target_cell_ for target (" << current_target.x << "," << current_target.y << ")." << std::endl;
+                        }
+                    }
+                    else // Path not found by BFS (either truly no path, or stuck cell blocked only path)
+                    {
+                        // if (path_leads_to_recent_stuck_cell) // This part of the log is no longer reachable if BFS handles avoid_cell
+                        // {
+                        //     std::cout << "Robot " << robot_id << " [FSM]: Path to (" << current_target.x << "," << current_target.y
+                        //               << ") found, BUT it leads directly into recently stuck cell ("
+                        //               << last_stuck_inducing_target_cell_.at(robot_id).x << "," << last_stuck_inducing_target_cell_.at(robot_id).y
+                        //               << "). Invalidating path and consuming last_stuck_inducing_target_cell_." << std::endl;
+                        //     last_stuck_inducing_target_cell_.erase(robot_id); // Consume this info
+                        // }
+                        // else
+                        // {
+                        std::cout << "Robot " << robot_id << " [FSM]: Path to (" << current_target.x << "," << current_target.y << ") NOT FOUND (tried avoiding stuck if applicable)." << std::endl;
+                        // }
+                        target_fail_counts_[robot_id][current_target]++;
+                        std::cout << "Robot " << robot_id << " incremented fail count for target (" << current_target.x << "," << current_target.y
+                                  << ") to " << target_fail_counts_[robot_id][current_target] << std::endl;
+
+                        if (target_fail_counts_[robot_id][current_target] >= MAX_TARGET_FAIL_COUNT)
+                        {
+                            std::cout << "Robot " << robot_id << " target (" << current_target.x << "," << current_target.y
+                                      << ") reached MAX_TARGET_FAIL_COUNT. Marking as unreachable." << std::endl;
+                            assigned_centers_.erase(current_target);
+                            unreachable_centers_.insert(current_target);
+                            drone_target_centers_.erase(robot_id);
+                            target_fail_counts_[robot_id].erase(current_target);
+                            if (last_stuck_inducing_target_cell_.count(robot_id))
+                            {
+                                last_stuck_inducing_target_cell_.erase(robot_id); // Clear on giving up target
+                                std::cout << "Robot " << robot_id << " [FSM] MAX_FAIL: Cleared last_stuck_inducing_target_cell_ for target (" << current_target.x << "," << current_target.y << ")." << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
+            // If it has a target and a valid path, idle_action will handle movement.
         }
         break;
     case DroneState::WAIT_TASKS:
         // Drone just holds, task handling is not part of this spec for drones
         // No specific action here, idle_action will return HOLD
+        if (last_stuck_inducing_target_cell_.count(robot_id))
+        {
+            last_stuck_inducing_target_cell_.erase(robot_id); // Clear when waiting
+            std::cout << "Robot " << robot_id << " [FSM] State WAIT_TASKS: Cleared last_stuck_inducing_target_cell_." << std::endl;
+        }
         break;
     case DroneState::HOLD:
         // Exploration and (re-exploration if triggered) are complete.
         // No specific action here, idle_action will return HOLD
+        if (last_stuck_inducing_target_cell_.count(robot_id))
+        {
+            last_stuck_inducing_target_cell_.erase(robot_id); // Clear when holding
+            std::cout << "Robot " << robot_id << " [FSM] State HOLD: Cleared last_stuck_inducing_target_cell_." << std::endl;
+        }
         break;
     }
 }
@@ -460,23 +632,23 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     {
         int h = known_object_map.size();
         int w = known_object_map[0].size();
-        std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Received map H:" << h << ", W:" << w << std::endl;
+        // std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Received map H:" << h << ", W:" << w << std::endl;
         // Print some critical/problematic cells previously identified
         if (h > 10 && w > 10)
         { // Basic boundary check for test coordinates
-            std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Cell (6,5) obj: " << static_cast<int>(known_object_map[5][6])
-                      << ", Cell (6,10) obj: " << static_cast<int>(known_object_map[10][6])
-                      << ", Cell (2,10) obj: " << static_cast<int>(known_object_map[10][2]) << std::endl;
+          // std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Cell (6,5) obj: " << static_cast<int>(known_object_map[5][6])
+          //           << ", Cell (6,10) obj: " << static_cast<int>(known_object_map[10][6])
+          //           << ", Cell (2,10) obj: " << static_cast<int>(known_object_map[10][2]) << std::endl;
         }
         if (h > 18 && w > 18)
         {
-            std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Cell (18,17) obj: " << static_cast<int>(known_object_map[17][18])
-                      << ", Cell (14,14) obj: " << static_cast<int>(known_object_map[14][14]) << std::endl;
+            // std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Cell (18,17) obj: " << static_cast<int>(known_object_map[17][18])
+            //           << ", Cell (14,14) obj: " << static_cast<int>(known_object_map[14][14]) << std::endl;
         }
     }
     else
     {
-        std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Received empty known_object_map." << std::endl;
+        // std::cout << "[OnInfoUpdated_Debug Tick: " << current_tick_ << "] Received empty known_object_map." << std::endl;
     }
 
     if (!initial_map_setup_done_)
@@ -509,31 +681,28 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
 
     update_map_knowledge(known_object_map, robots);
 
-    // Placeholder for accessing robots in handle_drone_fsm's re-explore logic
-    // This is a bit of a hack. Ideally, `robots` would be a member or passed differently.
-    static const vector<shared_ptr<ROBOT>> *robots_ptr_for_fsm = &robots;
-    // This static variable trick is problematic if on_info_updated instances are different
-    // For now, we'll try to pass robots directly or make it a member if issues arise.
-    // For the re-explore loop:
-    // if (current_tick_ >= REEXPLORE_TICK_THRESHOLD && !re_explore_triggered_) {
-    //    // ... logic from handle_drone_fsm for triggering re-explore ...
-    //    // This needs access to the `robots` list to reset all drone states.
-    // }
-    // Let's refine this: the FSM transition for REEXPLORE should occur within handle_drone_fsm,
-    // and it can iterate over the `robots` list passed to on_info_updated for resetting states.
-    // The placeholder `robots_for_fsm_access_placeholder` in `handle_drone_fsm` needs to be replaced.
-    // It should be:
-    // if (current_tick_ >= REEXPLORE_TICK_THRESHOLD && !re_explore_triggered_) {
-    //     // ...
-    //     for (const auto& r_ptr : *robots_ptr_for_fsm) { // or just `robots` if passed in
-    //         if (r_ptr->type == ROBOT::TYPE::DRONE) { /* reset logic */ }
-    //     }
-    // }
-    // The `handle_drone_fsm` needs the full robots list for the re-exploration trigger.
-    // Let's modify `handle_drone_fsm` signature or pass `robots` to it.
-    // For now, the FSM logic for re-exploration in handle_drone_fsm will be adapted
-    // to use the 'robots' list available in on_info_updated's scope if needed,
-    // or handle individual robot state changes without needing the full list in *that exact moment*.
+    // Check if all non-unreachable virtual centers have been visited or are assigned
+    // This check should be done for initial_explore_phase_complete_by_centers_
+    if (!initial_explore_phase_complete_by_centers_ && initial_map_setup_done_ && !virtual_centers_.empty())
+    {
+        bool all_centers_accounted_for = true;
+        for (const auto &center : virtual_centers_)
+        {
+            // A center is accounted for if it's visited OR marked as unreachable.
+            if (!visited_centers_.count(center) && !unreachable_centers_.count(center))
+            {
+                all_centers_accounted_for = false;
+                break;
+            }
+        }
+
+        if (all_centers_accounted_for)
+        {
+            std::cout << "Tick " << current_tick_ << ": All virtual centers are now either visited or marked unreachable. Initial exploration by centers complete." << std::endl;
+            initial_explore_phase_complete_by_centers_ = true;
+            // Drones in EXPLORE state will transition to WAIT_TASKS in their next FSM cycle.
+        }
+    }
 
     // The re-exploration trigger needs to iterate all drones. This should be done once.
     if (current_tick_ >= REEXPLORE_TICK_THRESHOLD && !re_explore_triggered_)
@@ -541,7 +710,14 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         std::cout << "Tick " << current_tick_ << ": Global REEXPLORE trigger initiated." << std::endl;
         visited_centers_.clear();
         assigned_centers_.clear();
-        unreachable_centers_.clear(); // Clear unreachable centers on re-explore
+        unreachable_centers_.clear();
+        target_fail_counts_.clear();
+        locally_discovered_walls_.clear();
+        if (!last_stuck_inducing_target_cell_.empty())
+        {
+            last_stuck_inducing_target_cell_.clear(); // Clear for all robots on global re-explore
+            std::cout << "[on_info_updated] Global REEXPLORE: Cleared all last_stuck_inducing_target_cell_ entries." << std::endl;
+        }
 
         for (const auto &robot_ptr : robots)
         {
@@ -554,7 +730,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             }
         }
         re_explore_triggered_ = true;
-        explore_complete_logged_ = false; // Allow logging for re-exploration phase
+        explore_complete_logged_ = false;
         std::cout << "All drones set to REEXPLORE state." << std::endl;
     }
 
@@ -603,223 +779,288 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
     {
         return ROBOT::ACTION::HOLD;
     }
+    int robot_id = robot.id; // For convenience
 
-    // drone_states_에 robot.id가 없을 경우를 대비 (on_info_updated에서 처리되지만 방어적으로)
-    if (drone_states_.find(robot.id) == drone_states_.end())
+    if (drone_states_.find(robot_id) == drone_states_.end())
     {
-        std::cerr << "Warning: Drone " << robot.id << " state not found in idle_action. Holding." << std::endl;
+        std::cerr << "Warning: Drone " << robot_id << " state not found in idle_action. Holding." << std::endl;
+        // Update maps before returning
+        previous_pos_map_[robot_id] = robot.get_coord();
+        last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
         return ROBOT::ACTION::HOLD;
     }
 
     Coord current_pos_this_tick = robot.get_coord();
 
     // Stuck detection logic
-    if (last_action_commanded_map_.count(robot.id) &&
-        last_action_commanded_map_.at(robot.id) != ROBOT::ACTION::HOLD && // Was commanded to move
-        previous_pos_map_.count(robot.id) &&
-        previous_pos_map_.at(robot.id) == current_pos_this_tick) // And position hasn't changed
+    if (last_action_commanded_map_.count(robot_id) &&
+        last_action_commanded_map_.at(robot_id) != ROBOT::ACTION::HOLD &&
+        previous_pos_map_.count(robot_id) &&
+        previous_pos_map_.at(robot_id) == current_pos_this_tick)
     {
-        ROBOT::ACTION last_action = last_action_commanded_map_.at(robot.id);
-        Coord stuck_pos = previous_pos_map_.at(robot.id);
-        Coord failed_target_coord = stuck_pos; // Initialize with stuck_pos
+        ROBOT::ACTION last_action = last_action_commanded_map_.at(robot_id);
+        Coord stuck_pos = previous_pos_map_.at(robot_id);
+        Coord failed_target_coord = stuck_pos;
 
-        // Determine the cell the robot tried to move into based on simulator's action interpretation
-        // Action 0 (Sim UP, y+), 1 (Sim DOWN, y-), 2 (Sim LEFT, x-), 3 (Sim RIGHT, x+)
         if (last_action == ROBOT::ACTION::UP)
-        { // Simulator's UP (0), our previously returned ROBOT::ACTION::UP
             failed_target_coord.y++;
-        }
         else if (last_action == ROBOT::ACTION::DOWN)
-        { // Simulator's DOWN (1)
             failed_target_coord.y--;
-        }
         else if (last_action == ROBOT::ACTION::LEFT)
-        { // Simulator's LEFT (2)
             failed_target_coord.x--;
-        }
         else if (last_action == ROBOT::ACTION::RIGHT)
-        { // Simulator's RIGHT (3)
             failed_target_coord.x++;
-        }
 
         if (failed_target_coord != stuck_pos)
-        { // Ensure it was a directional move
-            locally_discovered_walls_.insert(failed_target_coord);
-            std::cout << "Robot " << robot.id << " [idle_action] Added (" << failed_target_coord.x << "," << failed_target_coord.y
-                      << ") to locally_discovered_walls_." << std::endl;
-        }
-
-        std::cout << "Robot " << robot.id << " [idle_action] STUCK DETECTED at ("
-                  << current_pos_this_tick.x << "," << current_pos_this_tick.y
-                  << "). Last action: " << static_cast<int>(last_action) << ". Clearing path and target." << std::endl;
-
-        waypoint_cache_.erase(robot.id);
-        current_waypoint_idx_.erase(robot.id);
-        if (drone_target_centers_.count(robot.id))
         {
-            Coord high_level_target = drone_target_centers_.at(robot.id);
-            assigned_centers_.erase(high_level_target);
-            drone_target_centers_.erase(robot.id);
-            std::cout << "Robot " << robot.id << " [idle_action] Cleared high-level target due to being stuck." << std::endl;
+            // Only add to locally_discovered_walls if it's NOT the current high-level target center
+            bool is_dtarget = drone_target_centers_.count(robot_id) && drone_target_centers_.at(robot_id) == failed_target_coord;
+            if (!is_dtarget)
+            {
+                locally_discovered_walls_.insert(failed_target_coord);
+                std::cout << "Robot " << robot_id << " [idle_action] STUCK: Added (" << failed_target_coord.x << "," << failed_target_coord.y
+                          << ") to locally_discovered_walls_." << std::endl;
+            }
+            else
+            {
+                // If it IS the DTarget, it might still be a wall. Let FSM handle it, but log here.
+                // The FSM's is_valid_and_not_wall check should catch this if it's truly a wall.
+                // However, to ensure it's considered by FSM if map updates are slow, we can also add it here.
+                locally_discovered_walls_.insert(failed_target_coord); // Consider adding even if DTarget
+                std::cout << "Robot " << robot_id << " [idle_action] STUCK: Target (" << failed_target_coord.x << "," << failed_target_coord.y
+                          << ") is current DTarget. Added to locally_discovered_walls_ anyway for FSM check." << std::endl;
+            }
+
+            // Record as stuck-inducing, even if it IS the current high-level target center.
+            last_stuck_inducing_target_cell_[robot_id] = failed_target_coord;
+            std::cout << "Robot " << robot_id << " [idle_action] STUCK: Recorded (" << failed_target_coord.x << "," << failed_target_coord.y
+                      << ") as last_stuck_inducing_target_cell_ (even if it's the DTarget)." << std::endl;
+        }
+        else
+        {
+            // if failed_target_coord is same as stuck_pos, it implies no move was attempted or HOLD was commanded.
+            // This case might not be a typical "stuck against wall" scenario for recording stuck cell.
+            if (last_stuck_inducing_target_cell_.count(robot_id))
+            { // Clear if it existed from previous unrelated event
+                last_stuck_inducing_target_cell_.erase(robot_id);
+                std::cout << "Robot " << robot_id << " [idle_action] STUCK: (No specific failed_target_coord or it was self) Cleared last_stuck_inducing_target_cell_." << std::endl;
+            }
         }
 
-        previous_pos_map_[robot.id] = current_pos_this_tick;
-        last_action_commanded_map_[robot.id] = ROBOT::ACTION::HOLD; // Command HOLD now
+        std::cout << "Robot " << robot_id << " [idle_action] STUCK DETECTED at ("
+                  << current_pos_this_tick.x << "," << current_pos_this_tick.y
+                  << "). Last action: " << static_cast<int>(last_action) << ". Clearing path." << std::endl;
+
+        waypoint_cache_.erase(robot_id);
+        current_waypoint_idx_.erase(robot_id);
+
+        if (drone_target_centers_.count(robot_id))
+        {
+            Coord current_target = drone_target_centers_.at(robot_id);
+            target_fail_counts_[robot_id][current_target]++;
+            std::cout << "Robot " << robot_id << " [idle_action] STUCK: Incremented fail count for target ("
+                      << current_target.x << "," << current_target.y << ") to "
+                      << target_fail_counts_[robot_id][current_target] << std::endl;
+
+            if (target_fail_counts_[robot_id][current_target] >= MAX_TARGET_FAIL_COUNT)
+            {
+                std::cout << "Robot " << robot_id << " [idle_action] STUCK: Target (" << current_target.x << "," << current_target.y
+                          << ") reached MAX_TARGET_FAIL_COUNT. Clearing target and marking unreachable." << std::endl;
+                assigned_centers_.erase(current_target);
+                unreachable_centers_.insert(current_target);
+                drone_target_centers_.erase(robot_id);
+                target_fail_counts_[robot_id].erase(current_target);
+                if (last_stuck_inducing_target_cell_.count(robot_id))
+                {
+                    last_stuck_inducing_target_cell_.erase(robot_id); // Clear on giving up target
+                    std::cout << "Robot " << robot_id << " [idle_action] STUCK_MAX_FAIL: Cleared last_stuck_inducing_target_cell_ for target (" << current_target.x << "," << current_target.y << ")." << std::endl;
+                }
+            }
+        }
+
+        previous_pos_map_[robot_id] = current_pos_this_tick;
+        last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
         return ROBOT::ACTION::HOLD;
+    }
+    else if (last_action_commanded_map_.count(robot_id) && previous_pos_map_.count(robot_id) && previous_pos_map_.at(robot_id) != current_pos_this_tick)
+    {
+        // Moved successfully, clear the last stuck cell if any
+        if (last_stuck_inducing_target_cell_.count(robot_id))
+        {
+            last_stuck_inducing_target_cell_.erase(robot_id);
+            std::cout << "Robot " << robot_id << " [idle_action] Moved successfully: Cleared last_stuck_inducing_target_cell_." << std::endl;
+        }
     }
 
     if (robot.get_status() != ROBOT::STATUS::IDLE)
     {
-        // Update maps before returning, so next tick knows current pos and that we commanded HOLD implicitly
-        previous_pos_map_[robot.id] = current_pos_this_tick;
-        last_action_commanded_map_[robot.id] = ROBOT::ACTION::HOLD;
+        previous_pos_map_[robot_id] = current_pos_this_tick;
+        last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD; // Implicitly holding if busy
         return ROBOT::ACTION::HOLD;
     }
 
-    DroneState current_state = drone_states_[robot.id];
+    DroneState current_state = drone_states_[robot_id];
 
-    if (current_state == DroneState::WAIT_TASKS || current_state == DroneState::HOLD)
+    if (current_state == DroneState::WAIT_TASKS || current_state == DroneState::HOLD ||
+        (current_state == DroneState::EXPLORE && initial_explore_phase_complete_by_centers_)) // Also hold if initial explore by centers is done
     {
-        previous_pos_map_[robot.id] = current_pos_this_tick;
-        last_action_commanded_map_[robot.id] = ROBOT::ACTION::HOLD;
+        previous_pos_map_[robot_id] = current_pos_this_tick;
+        last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
         return ROBOT::ACTION::HOLD;
     }
 
-    // EXPLORE or REEXPLORE state
-    if (waypoint_cache_.count(robot.id) && !waypoint_cache_[robot.id].empty())
+    // EXPLORE (before centers complete) or REEXPLORE state
+    if (waypoint_cache_.count(robot_id) && !waypoint_cache_[robot_id].empty())
     {
-        size_t &waypoint_idx = current_waypoint_idx_[robot.id];
-        const std::vector<Coord> &path = waypoint_cache_[robot.id];
-        Coord current_pos = robot.get_coord();
+        size_t &waypoint_idx = current_waypoint_idx_[robot_id];
+        const std::vector<Coord> &path = waypoint_cache_[robot_id];
+        // Coord current_pos = robot.get_coord(); // current_pos_this_tick already available
 
         if (waypoint_idx >= path.size())
         {
-            std::cout << "Robot " << robot.id << " [idle_action] has out-of-bounds waypoint_idx. Clearing path." << std::endl;
-            waypoint_cache_.erase(robot.id);
-            if (drone_target_centers_.count(robot.id))
-            {
-                assigned_centers_.erase(drone_target_centers_[robot.id]);
-                drone_target_centers_.erase(robot.id);
-            }
+            // This case should ideally be handled by FSM re-pathing or target completion.
+            // If it happens, path is invalid.
+            // std::cout << "Robot " << robot_id << " [idle_action] has out-of-bounds waypoint_idx. Clearing path." << std::endl;
+            waypoint_cache_.erase(robot_id);
+            current_waypoint_idx_.erase(robot_id);
+            // FSM will re-evaluate in next cycle.
+            previous_pos_map_[robot_id] = current_pos_this_tick;
+            last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
             return ROBOT::ACTION::HOLD;
         }
 
         Coord target_waypoint_for_this_step = path[waypoint_idx];
 
-        if (current_pos == target_waypoint_for_this_step)
+        if (current_pos_this_tick == target_waypoint_for_this_step)
         {
             waypoint_idx++;
             if (waypoint_idx >= path.size())
-            {
-                std::cout << "Robot " << robot.id << " [idle_action] completed path to target center " << current_pos.x << "," << current_pos.y << std::endl;
-                visited_centers_.insert(current_pos);
-                if (drone_target_centers_.count(robot.id) && drone_target_centers_[robot.id] == current_pos)
-                {
-                    assigned_centers_.erase(drone_target_centers_[robot.id]);
-                    drone_target_centers_.erase(robot.id);
-                }
-                else
-                {
-                    assigned_centers_.erase(current_pos);
-                }
-                waypoint_cache_.erase(robot.id);
-                current_waypoint_idx_.erase(robot.id);
+            { // Reached end of current path (which should be the drone_target_center)
+                // std::cout << "Robot " << robot_id << " [idle_action] completed path, current_pos: "
+                //           << current_pos_this_tick.x << "," << current_pos_this_tick.y << std::endl;
+                // FSM's job to mark center as visited and assign new one. Path is now empty.
+                waypoint_cache_.erase(robot_id);
+                current_waypoint_idx_.erase(robot_id);
+                // If current_pos_this_tick is the target center, FSM will handle it.
+                // If not (e.g. path was short/cleared), FSM will re-evaluate.
+                previous_pos_map_[robot_id] = current_pos_this_tick;
+                last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
                 return ROBOT::ACTION::HOLD;
             }
             target_waypoint_for_this_step = path[waypoint_idx];
         }
 
-        ROBOT::ACTION planned_action = get_move_action_to_target(current_pos, target_waypoint_for_this_step);
+        ROBOT::ACTION planned_action = get_move_action_to_target(current_pos_this_tick, target_waypoint_for_this_step);
 
-        if (planned_action == ROBOT::ACTION::HOLD)
+        if (planned_action == ROBOT::ACTION::HOLD) // Should not happen if current_pos != target_waypoint
         {
+            previous_pos_map_[robot_id] = current_pos_this_tick;
+            last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
             return ROBOT::ACTION::HOLD;
         }
 
-        Coord immediate_target_cell = current_pos;
+        Coord immediate_target_cell = current_pos_this_tick;
+        // Determine immediate_target_cell based on 스케줄러's planned_action (before Y-swap)
         if (planned_action == ROBOT::ACTION::UP)
-            immediate_target_cell.y--;
+            immediate_target_cell.y--; // UP for scheduler means y decreases
         else if (planned_action == ROBOT::ACTION::DOWN)
-            immediate_target_cell.y++;
+            immediate_target_cell.y++; // DOWN for scheduler means y increases
         else if (planned_action == ROBOT::ACTION::LEFT)
             immediate_target_cell.x--;
         else if (planned_action == ROBOT::ACTION::RIGHT)
             immediate_target_cell.x++;
 
         if (map_height_ == 0 || map_width_ == 0)
-        {
-            std::cerr << "Error: map dimensions (H:" << map_height_ << ", W:" << map_width_ << ") not set in idle_action for robot " << robot.id << std::endl;
-            return ROBOT::ACTION::HOLD;
+        { /* error handling */
         }
 
-        // Debugging output before is_valid_and_not_wall
-        if (immediate_target_cell.y >= 0 && immediate_target_cell.y < map_height_ &&
-            immediate_target_cell.x >= 0 && immediate_target_cell.x < map_width_)
-        {
-            std::cout << "Robot " << robot.id << " [idle_action_debug]: Checking cell (" << immediate_target_cell.x << "," << immediate_target_cell.y
-                      << "). Scheduler sees it as: " << static_cast<int>(known_object_map[immediate_target_cell.y][immediate_target_cell.x])
-                      << " (OBJECT enum val)" << std::endl;
-        }
-        else
-        {
-            std::cout << "Robot " << robot.id << " [idle_action_debug]: Immediate target cell (" << immediate_target_cell.x << "," << immediate_target_cell.y
-                      << ") is OUT OF BOUNDS for known_object_map (H:" << map_height_ << ", W:" << map_width_ << ")" << std::endl;
-        }
-
+        // is_valid_and_not_wall uses scheduler's coordinate system (y decreases upwards)
         bool is_valid_move = is_valid_and_not_wall(immediate_target_cell.y, immediate_target_cell.x, known_object_map);
-        std::cout << "Robot " << robot.id << " [idle_action_debug]: is_valid_move result: " << (is_valid_move ? "true" : "false") << std::endl;
 
         if (!is_valid_move)
         {
-            std::cout << "Robot " << robot.id << " [idle_action] detected wall/invalid for next step " // 메시지 수정
+            std::cout << "Robot " << robot_id << " [idle_action] detected wall/invalid for next step "
                       << "(" << immediate_target_cell.x << "," << immediate_target_cell.y << ") from ("
-                      << current_pos.x << "," << current_pos.y << ") towards path waypoint ("
+                      << current_pos_this_tick.x << "," << current_pos_this_tick.y << ") towards path waypoint ("
                       << target_waypoint_for_this_step.x << "," << target_waypoint_for_this_step.y
-                      << "). Invalidating path and current high-level target." << std::endl;
+                      << "). Clearing path." << std::endl;
 
-            waypoint_cache_.erase(robot.id);
-            current_waypoint_idx_.erase(robot.id);
-
-            if (drone_target_centers_.count(robot.id))
+            // Only add to locally_discovered_walls if it's NOT the current high-level target center
+            bool is_dtarget_wall_detect = drone_target_centers_.count(robot_id) && drone_target_centers_.at(robot_id) == immediate_target_cell;
+            if (!is_dtarget_wall_detect)
             {
-                Coord high_level_target = drone_target_centers_[robot.id];
-                assigned_centers_.erase(high_level_target);
-                drone_target_centers_.erase(robot.id);
-                std::cout << "Robot " << robot.id << " [idle_action] Cleared high-level target (" << high_level_target.x << "," << high_level_target.y << ")" << std::endl;
+                locally_discovered_walls_.insert(immediate_target_cell);
+                std::cout << "Robot " << robot_id << " [idle_action] WallDetect: Added (" << immediate_target_cell.x << "," << immediate_target_cell.y
+                          << ") to locally_discovered_walls_." << std::endl;
             }
-            // Update maps before returning HOLD
-            previous_pos_map_[robot.id] = current_pos_this_tick; // Assuming current_pos_this_tick is available
-            last_action_commanded_map_[robot.id] = ROBOT::ACTION::HOLD;
-            return ROBOT::ACTION::HOLD;
+            else
+            {
+                locally_discovered_walls_.insert(immediate_target_cell); // Consider adding even if DTarget
+                std::cout << "Robot " << robot_id << " [idle_action] WallDetect: Target (" << immediate_target_cell.x << "," << immediate_target_cell.y
+                          << ") is current DTarget. Added to locally_discovered_walls_ anyway for FSM check." << std::endl;
+            }
+
+            // Record as stuck-inducing, even if it IS the current high-level target center.
+            last_stuck_inducing_target_cell_[robot_id] = immediate_target_cell;
+            std::cout << "Robot " << robot_id << " [idle_action] WallDetect: Recorded (" << immediate_target_cell.x << "," << immediate_target_cell.y
+                      << ") as last_stuck_inducing_target_cell_ (even if it's the DTarget)." << std::endl;
+
+            waypoint_cache_.erase(robot_id); // Clear path only
+            current_waypoint_idx_.erase(robot_id);
+
+            if (drone_target_centers_.count(robot_id))
+            {
+                Coord current_target = drone_target_centers_.at(robot_id);
+                target_fail_counts_[robot_id][current_target]++;
+                std::cout << "Robot " << robot_id << " [idle_action] WallDetect: Incremented fail count for target ("
+                          << current_target.x << "," << current_target.y << ") to "
+                          << target_fail_counts_[robot_id][current_target] << std::endl;
+
+                if (target_fail_counts_[robot_id][current_target] >= MAX_TARGET_FAIL_COUNT)
+                {
+                    std::cout << "Robot " << robot_id << " [idle_action] WallDetect: Target (" << current_target.x << "," << current_target.y
+                              << ") reached MAX_TARGET_FAIL_COUNT. Clearing target and marking unreachable." << std::endl;
+                    assigned_centers_.erase(current_target);
+                    unreachable_centers_.insert(current_target);
+                    drone_target_centers_.erase(robot_id);
+                    target_fail_counts_[robot_id].erase(current_target);
+                    if (last_stuck_inducing_target_cell_.count(robot_id))
+                    {
+                        last_stuck_inducing_target_cell_.erase(robot_id); // Clear on giving up target
+                        std::cout << "Robot " << robot_id << " [idle_action] WallDetect_MAX_FAIL: Cleared last_stuck_inducing_target_cell_ for target (" << current_target.x << "," << current_target.y << ")." << std::endl;
+                    }
+                }
+                // FSM will handle finding new path or new target
+
+                previous_pos_map_[robot_id] = current_pos_this_tick;
+                last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
+                return ROBOT::ACTION::HOLD;
+            }
         }
 
-        ROBOT::ACTION action_to_return_to_simulator;
+        // Y-axis swap for simulator
+        ROBOT::ACTION action_to_return_to_simulator = planned_action;
         if (planned_action == ROBOT::ACTION::UP)
-        {
             action_to_return_to_simulator = ROBOT::ACTION::DOWN;
-        }
         else if (planned_action == ROBOT::ACTION::DOWN)
-        {
             action_to_return_to_simulator = ROBOT::ACTION::UP;
-        }
-        else
-        {
-            action_to_return_to_simulator = planned_action; // LEFT, RIGHT, HOLD
-        }
 
-        previous_pos_map_[robot.id] = current_pos_this_tick; // Assuming current_pos_this_tick is available
-        last_action_commanded_map_[robot.id] = action_to_return_to_simulator;
+        previous_pos_map_[robot_id] = current_pos_this_tick;
+        last_action_commanded_map_[robot_id] = action_to_return_to_simulator;
         return action_to_return_to_simulator;
     }
-    else // 경로 캐시가 비어있는 경우
+    else // No path in cache
     {
-        previous_pos_map_[robot.id] = current_pos_this_tick; // Assuming current_pos_this_tick is available
-        last_action_commanded_map_[robot.id] = ROBOT::ACTION::HOLD;
+        // FSM should assign a target and/or path if appropriate for the current state.
+        // If drone is IDLE and in EXPLORE/REEXPLORE, FSM will attempt to assign/re-path.
+        // std::cout << "Robot " << robot_id << " [idle_action] No path in cache. Holding for FSM." << std::endl;
+        previous_pos_map_[robot_id] = current_pos_this_tick;
+        last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
         return ROBOT::ACTION::HOLD;
     }
 
-    // Defensive HOLD at the very end if somehow logic falls through (should not happen)
-    previous_pos_map_[robot.id] = current_pos_this_tick; // Assuming current_pos_this_tick is available
-    last_action_commanded_map_[robot.id] = ROBOT::ACTION::HOLD;
+    // Fallback HOLD
+    previous_pos_map_[robot_id] = current_pos_this_tick;
+    last_action_commanded_map_[robot_id] = ROBOT::ACTION::HOLD;
     return ROBOT::ACTION::HOLD;
 }

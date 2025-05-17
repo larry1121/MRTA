@@ -52,6 +52,8 @@ public:
                               const vector<shared_ptr<ROBOT>> &robots,
                               const ROBOT &robot);
 
+    void initialize_scheduler_state(const vector<vector<OBJECT>> &known_object_map, const vector<shared_ptr<ROBOT>> &robots);
+
 private:
     // Member Variables
     std::map<int, DroneState> drone_states_;
@@ -71,20 +73,23 @@ private:
     bool initial_map_setup_done_ = false;
     bool explore_complete_logged_ = false;
     bool re_explore_triggered_ = false;
+    bool initial_explore_phase_complete_by_centers_ = false;
 
     // Compile-time constant as per requirements
     static constexpr int TOTAL_TICKS = 2000;
     static constexpr double EXPLORATION_GOAL_RATIO = 0.95;
     static constexpr int REEXPLORE_TICK_THRESHOLD = 1500;
+    static constexpr int MAX_TARGET_FAIL_COUNT = 5;
 
     // Members for stuck detection
     std::map<int, Coord> previous_pos_map_;
     std::map<int, ROBOT::ACTION> last_action_commanded_map_;
     std::set<Coord> locally_discovered_walls_; // For walls found by failed moves
     std::set<Coord> unreachable_centers_;      // Centers found to be unreachable by BFS
+    std::map<int, std::map<Coord, int>> target_fail_counts_;
+    std::map<int, Coord> last_stuck_inducing_target_cell_; // NEW: robot_id -> cell that caused STUCK
 
     // Private Helper Functions
-    void initialize_scheduler_state(const vector<vector<OBJECT>> &known_object_map, const vector<shared_ptr<ROBOT>> &robots);
     void update_map_knowledge(const vector<vector<OBJECT>> &known_object_map, const vector<shared_ptr<ROBOT>> &robots);
 
     void generate_virtual_centers_grid();
@@ -92,7 +97,8 @@ private:
 
     // Pathfinding
     std::vector<Coord> find_path_bfs(const Coord &start, const Coord &goal,
-                                     const vector<vector<OBJECT>> &known_object_map);
+                                     const vector<vector<OBJECT>> &known_object_map,
+                                     const Coord *avoid_cell = nullptr);
     ROBOT::ACTION get_move_action_to_target(const Coord &current_pos, const Coord &target_pos);
     bool is_valid_and_not_wall(int r, int c, const std::vector<std::vector<OBJECT>> &known_map);
 
