@@ -112,5 +112,8 @@ public:
         }
         return (cost1 + cost2) / 2;
     }
+
+    // Method to print the task_total_costs table
+    void print_task_total_costs_table(const vector<shared_ptr<ROBOT>>& all_robots, const vector<shared_ptr<TASK>>& all_tasks) const;
 };
 #endif SCHEDULER_H_

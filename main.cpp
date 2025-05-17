@@ -7,7 +7,7 @@ int main()
     constexpr int NUM_ROBOT = 6;
     constexpr int NUM_MAX_TASKS = 16;
     constexpr int NUM_INITIAL_TASKS = NUM_MAX_TASKS / 2;
-    constexpr int WALL_DENSITY = 20;
+    constexpr int WALL_DENSITY = 0;
     constexpr int TIME_MAX = MAP_SIZE * 100;
     constexpr int ROBOT_ENERGY = TIME_MAX * 6;
     set<Coord> observed_coords;
@@ -52,6 +52,12 @@ int main()
                                   active_tasks,
                                   robots);
         timer.stop();
+
+        // Print the task_total_costs table every 100 ticks
+        if (time > 0 && time % 100 == 0) { // time > 0 to avoid printing at the very start if not desired
+            scheduler.print_task_total_costs_table(map.get_robots(), map.get_tasks());
+        }
+
         for (auto robot : robots)
         {
             auto &status = robot->get_status();

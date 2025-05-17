@@ -329,6 +329,94 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
                                      const vector<shared_ptr<ROBOT>> &robots,
                                      const ROBOT &robot)
 {
+
+if (robot.id == 0){
+        if(robot.get_coord().x<2){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().x<4 && robot.get_coord().y!=2 &&robot.get_coord().x!=2){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+        else if(robot.get_coord().x>7){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+        else if(robot.get_coord().x>=4&&robot.get_coord().x!=7&&robot.get_coord().y != 17){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().y<2){
+            return static_cast<ROBOT::ACTION>(0);
+        }
+        else if(robot.get_coord().y>17){
+            return static_cast<ROBOT::ACTION>(1);
+        }
+        else if(robot.get_coord().x==2 && robot.get_coord().y>2){
+            return static_cast<ROBOT::ACTION>(1);
+        }
+        else if(robot.get_coord().x==2 && robot.get_coord().y==2){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().y==2 && robot.get_coord().x<7){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().y==2 && robot.get_coord().x==7){
+            return static_cast<ROBOT::ACTION>(0);
+        }
+        else if(robot.get_coord().x==7 && robot.get_coord().y>2 && robot.get_coord().y !=17){
+            return static_cast<ROBOT::ACTION>(0);
+        }
+        else if(robot.get_coord().x==7 && robot.get_coord().y==17){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+        else if(robot.get_coord().y==17 && robot.get_coord().x>2){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+    }
+    if (robot.id == 3){
+        if(robot.get_coord().x<12){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().x<14 &&robot.get_coord().y!=2 &&robot.get_coord().x!=12){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+        else if(robot.get_coord().x>17){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+        else if(robot.get_coord().x>=14&&robot.get_coord().x!=17&&robot.get_coord().y != 17){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().y<2){
+            return static_cast<ROBOT::ACTION>(0);
+        }
+        else if(robot.get_coord().y>17){
+            return static_cast<ROBOT::ACTION>(1);
+        }
+        else if(robot.get_coord().x==12 && robot.get_coord().y>2){
+            return static_cast<ROBOT::ACTION>(1);
+        }
+        else if(robot.get_coord().x==12 && robot.get_coord().y==2){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().y==2 && robot.get_coord().x<17){
+            return static_cast<ROBOT::ACTION>(3);
+        }
+        else if(robot.get_coord().y==2 && robot.get_coord().x==17){
+            return static_cast<ROBOT::ACTION>(0);
+        }
+        else if(robot.get_coord().x==17 && robot.get_coord().y>2 && robot.get_coord().y !=17){
+            return static_cast<ROBOT::ACTION>(0);
+        }
+        else if(robot.get_coord().x==17 && robot.get_coord().y==17){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+        else if(robot.get_coord().y==17 && robot.get_coord().x>12){
+            return static_cast<ROBOT::ACTION>(2);
+        }
+    }
+
+
+
+
+
     if (robot.get_status() != ROBOT::STATUS::IDLE) { 
         return ROBOT::ACTION::HOLD;
     }
@@ -412,4 +500,42 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
     }
 
     return ROBOT::ACTION::HOLD;
+}
+
+void Scheduler::print_task_total_costs_table(const vector<shared_ptr<ROBOT>>& all_robots, const vector<shared_ptr<TASK>>& all_tasks) const
+{
+    std::cout << "\n--- Task Total Costs Table (Robot_ID -> Task_ID -> Total Cost) ---" << std::endl;
+
+    if (task_total_costs.empty()) {
+        std::cout << "Table is currently empty." << std::endl;
+        return;
+    }
+
+    for (const auto& robot_entry : task_total_costs) {
+        int robot_id = robot_entry.first;
+        const auto& task_map_for_robot = robot_entry.second;
+
+        if (task_map_for_robot.empty()) {
+            // std::cout << "Robot ID: " << robot_id << " has no task cost entries." << std::endl;
+            continue; // Skip robots with no task entries for cleaner output
+        }
+
+        std::cout << "Robot ID: " << robot_id << std::endl;
+        std::cout << "  Task ID | Total Cost" << std::endl;
+        std::cout << "  --------------------" << std::endl;
+
+        for (const auto& task_entry : task_map_for_robot) {
+            int task_id = task_entry.first;
+            int total_cost = task_entry.second;
+
+            std::cout << "  " << std::setw(7) << task_id << " | ";
+            if (total_cost == std::numeric_limits<int>::max()) {
+                std::cout << "INF (or N/A)" << std::endl;
+            } else {
+                std::cout << std::setw(10) << total_cost << std::endl;
+            }
+        }
+        std::cout << std::endl; // Add a blank line between robots for readability
+    }
+    std::cout << "--------------------------------------------------------------------" << std::endl;
 }
