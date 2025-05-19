@@ -3,6 +3,7 @@
 #include <queue>
 #include <algorithm>
 #include <cstdio>
+#include <set>
 
 bool Scheduler::coord_equal(const Coord& a, const Coord& b) {
     return a.x == b.x && a.y == b.y;
@@ -11,53 +12,6 @@ bool Scheduler::coord_equal(const Coord& a, const Coord& b) {
 void Scheduler::init_tiles(const std::vector<std::vector<OBJECT>>& known_object_map) {
     if (map_size != -1) return;
     map_size = static_cast<int>(known_object_map.size());
-    tile_rows = (map_size + tile_size - 1) / tile_size;
-    tile_cols = (map_size + tile_size - 1) / tile_size;
-    tiles.resize(tile_rows, std::vector<TileInfo>(tile_cols));
-    for (int i = 0; i < tile_rows; ++i) {
-        for (int j = 0; j < tile_cols; ++j) {
-            int cx = j * tile_size + tile_range;
-            int cy = i * tile_size + tile_range;
-            if (cx >= map_size) cx = map_size - 1;
-            if (cy >= map_size) cy = map_size - 1;
-            // 중심이 벽이면 주변 빈 칸 찾기
-            if (known_object_map[cx][cy] == OBJECT::WALL) {
-                bool found = false;
-                for (int dist = 1; dist <= tile_range + 1 && !found; ++dist) {
-                    for (int dx = -dist; dx <= dist && !found; ++dx) {
-                        for (int dy = -dist; dy <= dist && !found; ++dy) {
-                            int nx = cx + dx, ny = cy + dy;
-                            if (nx >= 0 && nx < map_size && ny >= 0 && ny < map_size
-                                && known_object_map[nx][ny] != OBJECT::WALL) {
-                                cx = nx; cy = ny; found = true;
-                            }
-                        }
-                    }
-                }
-            }
-            tiles[i][j].center = Coord(cx, cy);
-        }
-    }
-}
-
-void Scheduler::update_tile_info(const std::vector<std::vector<OBJECT>>& known_object_map) {
-    for (int i = 0; i < tile_rows; ++i) {
-        for (int j = 0; j < tile_cols; ++j) {
-            int ux = tiles[i][j].center.x - tile_range;
-            int uy = tiles[i][j].center.y - tile_range;
-            int unseen = 0;
-            for (int dx = 0; dx < tile_size; ++dx) {
-                for (int dy = 0; dy < tile_size; ++dy) {
-                    int x = ux + dx, y = uy + dy;
-                    if (x >= 0 && x < map_size && y >= 0 && y < map_size) {
-                        if (known_object_map[x][y] == OBJECT::UNKNOWN)
-                            unseen++;
-                    }
-                }
-            }
-            tiles[i][j].unseen_cells = unseen;
-        }
-    }
 }
 
 std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
@@ -80,7 +34,7 @@ std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
             if (nx < 0 || ny < 0 || nx >= map_size || ny >= map_size) continue;
             if (known_object_map[nx][ny] == OBJECT::WALL) continue;
             int ncost = known_cost_map[nx][ny][static_cast<int>(type)];
-            if (ncost == -1) ncost = 10000; // 미확인 영역 진입 강제 허용!
+            if (ncost == -1) ncost = 10000; // 미확인 영역 진입 강제 허용
             if (ncost >= std::numeric_limits<int>::max() / 2) continue;
             int alt = cost + ncost;
             if (alt < dist[nx][ny]) {
@@ -119,51 +73,65 @@ void Scheduler::on_info_updated(const set<Coord>&,
     const std::vector<std::shared_ptr<ROBOT>>& robots)
 {
     init_tiles(known_object_map);
-    update_tile_info(known_object_map);
 
-    int n_drones = 0;
-    for (const auto& r : robots) if (r->type == ROBOT::TYPE::DRONE) ++n_drones;
+    // 드론 목표 칸 예약(중복 방지)
+    cell_reserved.clear();
+    for (std::unordered_map<int, Coord>::iterator it = drone_targets.begin(); it != drone_targets.end(); ++it) {
+        cell_reserved.insert(it->second);
+    }
 
-    for (const auto& robot_ptr : robots) {
+    for (size_t k = 0; k < robots.size(); ++k) {
+        const auto& robot_ptr = robots[k];
         if (robot_ptr->type != ROBOT::TYPE::DRONE) continue;
         int rid = robot_ptr->id;
         Coord drone_pos = robot_ptr->get_coord();
 
-        // 항상 다음 타일 중심 목표 선정(== '남은 에너지 모두 소모' 적극 탐색)
-        double best_score = -1e9;
-        Coord best_center = drone_pos;
-        std::vector<Coord> best_path;
+        if (robot_ptr->get_energy() <= 0) {
+            drone_paths[rid].clear();
+            drone_targets[rid] = drone_pos;
+            continue;
+        }
+        if (drone_paths.count(rid) && !drone_paths[rid].empty())
+            continue;
 
-        for (int i = 0; i < tile_rows; ++i) {
-            std::vector<int> js(tile_cols);
-            for (int jj = 0; jj < tile_cols; ++jj) js[jj] = jj;
-            if (i % 2) std::reverse(js.begin(), js.end());
-            for (int jj : js) {
-                int j = (jj + rid) % tile_cols; // 각 드론에 열 분배
-                if (tiles[i][j].unseen_cells == 0) continue;
-                Coord target = tiles[i][j].center;
-                if (known_object_map[target.x][target.y] == OBJECT::WALL) continue;
-                auto path = plan_path(drone_pos, target, known_cost_map, ROBOT::TYPE::DRONE, known_object_map);
-                if (path.empty()) continue;
-                // 적극적으로 '아직 안 밝혀진 셀 많은 타일'을 우선!
-                double score = static_cast<double>(tiles[i][j].unseen_cells) / (path.size() + 1);
-                if (score > best_score) {
-                    best_score = score;
-                    best_center = target;
-                    best_path = path;
+        std::vector<Coord> candidate_targets;
+        // "자신이 도달 가능한 모든 known 셀(벽X) 중, 관측범위 내 unknown이 1개라도 있는 칸"
+        for (int x = 0; x < map_size; ++x) {
+            for (int y = 0; y < map_size; ++y) {
+                if (known_object_map[x][y] == OBJECT::WALL) continue;
+                if (cell_reserved.count(Coord(x, y))) continue;
+                bool has_unknown = false;
+                for (int dx = -2; dx <= 2 && !has_unknown; ++dx) {
+                    for (int dy = -2; dy <= 2 && !has_unknown; ++dy) {
+                        int nx = x + dx, ny = y + dy;
+                        if (nx < 0 || nx >= map_size || ny < 0 || ny >= map_size) continue;
+                        if (known_object_map[nx][ny] == OBJECT::UNKNOWN) has_unknown = true;
+                    }
                 }
+                if (!has_unknown) continue;
+                candidate_targets.push_back(Coord(x, y));
             }
         }
-        // 아무 목표도 없으면 내 자리에라도 머무르며 관측
-        if (best_path.empty() && known_object_map[drone_pos.x][drone_pos.y] == OBJECT::UNKNOWN) {
-            best_path.push_back(drone_pos);
-            best_center = drone_pos;
-            best_score = 1.0;
+
+        std::vector<Coord> best_path;
+        Coord best_target = drone_pos;
+        int min_path_len = std::numeric_limits<int>::max();
+
+        for (size_t i = 0; i < candidate_targets.size(); ++i) {
+            std::vector<Coord> path = plan_path(drone_pos, candidate_targets[i], known_cost_map, ROBOT::TYPE::DRONE, known_object_map);
+            if (path.empty()) continue;
+            if ((int)path.size() < min_path_len) {
+                min_path_len = (int)path.size();
+                best_target = candidate_targets[i];
+                best_path = path;
+            }
         }
+
         if (!best_path.empty()) {
             drone_paths[rid] = std::deque<Coord>(best_path.begin(), best_path.end());
-            drone_targets[rid] = best_center;
-            printf("[DEBUG] Drone %d: path=%zu, target=(%d,%d)\n", rid, best_path.size(), best_center.x, best_center.y);
+            drone_targets[rid] = best_target;
+            cell_reserved.insert(best_target);
+            printf("[DEBUG] Drone %d: path=%zu, target=(%d,%d)\n", rid, best_path.size(), best_target.x, best_target.y);
         }
         else {
             drone_paths[rid].clear();
