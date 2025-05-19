@@ -3,31 +3,29 @@
 
 #include "simulator.h"
 #include <vector>
-#include <map>
-#include <set>
 #include <queue>
-#include <algorithm>
-#include <cmath>
-#include <limits> // Required for std::numeric_limits
+#include <map>
+#include <limits> // For std::numeric_limits
+#include <algorithm> // For std::reverse, std::min
 
-// Forward declaration if Coord is defined elsewhere and not included by simulator.h
-// struct Coord;
+// Forward declaration
+class ROBOT;
+class TASK;
+struct Coord; // Already in simulator.h, but good for clarity if used standalone
+
+// Helper struct to store path information
+struct PathInfo {
+    std::vector<ROBOT::ACTION> actions;
+    int cost;
+    std::vector<Coord> coordinates; // To check for cache invalidation
+
+    PathInfo() : cost(std::numeric_limits<int>::max()) {}
+    PathInfo(std::vector<ROBOT::ACTION> acts, int c, std::vector<Coord> coords) : actions(std::move(acts)), cost(c), coordinates(std::move(coords)) {}
+};
 
 class Scheduler
 {
 public:
-    // Enum for FSM states, nested as requested
-    enum class DroneState
-    {
-        EXPLORE,
-        WAIT_TASKS,
-        REEXPLORE,
-        HOLD
-    };
-
-    // Constructor (if needed for initialization)
-    Scheduler();
-
     void on_info_updated(const set<Coord> &observed_coords,
                          const set<Coord> &updated_coords,
                          const vector<vector<vector<int>>> &known_cost_map,
@@ -52,68 +50,83 @@ public:
                               const vector<shared_ptr<ROBOT>> &robots,
                               const ROBOT &robot);
 
-    void initialize_scheduler_state(const vector<vector<OBJECT>> &known_object_map, const vector<shared_ptr<ROBOT>> &robots);
-
 private:
-    // Member Variables
-    std::map<int, DroneState> drone_states_;
-    std::map<int, std::vector<Coord>> waypoint_cache_; // Stores path for each drone
-    std::map<int, size_t> current_waypoint_idx_;       // Current target waypoint index in the cache
-    std::map<int, Coord> drone_target_centers_;        // Current high-level spiral center target for each drone
+    // Robot_id -> goal_coord -> PathInfo
+    std::map<int, std::map<Coord, PathInfo>> path_cache;
 
-    int map_width_ = 0;
-    int map_height_ = 0;
-    int current_tick_ = 0;
-    double known_ratio_ = 0.0;
+    // Robot_id -> task_id -> total_cost (path_cost + task_execution_cost)
+    std::map<int, std::map<int, int>> task_total_costs;
+    
+    // Robot_id -> current target task_id (if any) - This might be redundant if robotToTask is primary
+    std::map<int, int> robot_target_task_id; // Kept for now, role might merge with robotToTask
 
-    std::vector<Coord> virtual_centers_; // List of all potential centers to visit
-    std::set<Coord> assigned_centers_;   // Centers currently assigned or path planned for a drone
-    std::set<Coord> visited_centers_;    // Centers that have been reached by a drone
+    // Robot_id -> current path being followed by the robot
+    std::map<int, PathInfo> robot_current_paths;
 
-    bool initial_map_setup_done_ = false;
-    bool explore_complete_logged_ = false;
-    bool re_explore_triggered_ = false;
-    bool initial_explore_phase_complete_by_centers_ = false;
+    // Teammate's structure for assignment: Robot_id -> Task_id
+    std::map<int, int> robotToTask; // Using std::map for consistency, teammate used unordered_map
 
-    // Compile-time constant as per requirements
-    static constexpr int TOTAL_TICKS = 2000;
-    static constexpr double EXPLORATION_GOAL_RATIO = 0.95;
-    static constexpr int REEXPLORE_TICK_THRESHOLD = 1500;
-    static constexpr int MAX_TARGET_FAIL_COUNT = 5;
+    bool initial_map_revealed_and_assigned = false;
 
-    // Members for stuck detection
-    std::map<int, Coord> previous_pos_map_;
-    std::map<int, ROBOT::ACTION> last_action_commanded_map_;
-    std::set<Coord> locally_discovered_walls_; // For walls found by failed moves
-    std::set<Coord> unreachable_centers_;      // Centers found to be unreachable by BFS
-    std::map<int, std::map<Coord, int>> target_fail_counts_;
-    std::map<int, Coord> last_stuck_inducing_target_cell_; // NEW: robot_id -> cell that caused STUCK
+    // Helper to convert action to coordinate change
+    Coord action_to_delta(ROBOT::ACTION action) {
+        switch (action) {
+            case ROBOT::ACTION::UP:    return {0, 1};
+            case ROBOT::ACTION::DOWN:  return {0, -1};
+            case ROBOT::ACTION::LEFT:  return {-1, 0};
+            case ROBOT::ACTION::RIGHT: return {1, 0};
+            case ROBOT::ACTION::HOLD:  return {0, 0};
+            default:                   return {0, 0}; // Should not happen
+        }
+    }
 
-    // Private Helper Functions
-    void update_map_knowledge(const vector<vector<OBJECT>> &known_object_map, const vector<shared_ptr<ROBOT>> &robots);
+    // Dijkstra pathfinding algorithm
+    // Returns path cost, fills out_path_actions and out_path_coords.
+    // Returns std::numeric_limits<int>::max() if no path or not enough energy.
+    int dijkstra(const Coord& start,
+                 const Coord& goal,
+                 const ROBOT& robot,
+                 const int task_cost_for_robot, // task.get_cost(robot.type)
+                 const vector<vector<vector<int>>>& known_cost_map,
+                 const vector<vector<OBJECT>>& known_object_map,
+                 int map_size,
+                 std::vector<ROBOT::ACTION>& out_path_actions,
+                 std::vector<Coord>& out_path_coords);
 
-    void generate_virtual_centers_grid();
-    void sort_centers_for_spiral_path(std::vector<Coord> &centers); // To order virtual_centers_
+    // Task assignment logic (adapted from teammate)
+    void perform_task_assignment(const vector<shared_ptr<ROBOT>>& robots,
+                                 const vector<shared_ptr<TASK>>& active_tasks,
+                                 const vector<vector<OBJECT>>& known_object_map);
+    
+    // Helper to check if map is fully revealed
+    bool is_map_fully_revealed(const vector<vector<OBJECT>>& known_object_map) const;
 
-    // Pathfinding
-    std::vector<Coord> find_path_bfs(const Coord &start, const Coord &goal,
-                                     const vector<vector<OBJECT>> &known_object_map,
-                                     const Coord *avoid_cell = nullptr);
-    ROBOT::ACTION get_move_action_to_target(const Coord &current_pos, const Coord &target_pos);
-    bool is_valid_and_not_wall(int r, int c, const std::vector<std::vector<OBJECT>> &known_map);
+public:
+    // Static helper function for move cost
+    static inline int calculate_move_cost(const Coord& c1, const Coord& c2, ROBOT::TYPE r_type,
+                                 const vector<vector<vector<int>>>& cost_map)
+    {
+        if (c1 == c2) return 0; // No cost if not moving
 
-    // Drone FSM and Action Logic
-    void handle_drone_fsm(const shared_ptr<ROBOT> &robot,
-                          const vector<vector<vector<int>>> &known_cost_map,
-                          const vector<vector<OBJECT>> &known_object_map);
+        int type_idx = static_cast<int>(r_type);
+        // Cost to leave c1 and enter c2. Per problem: (cost[c1] + cost[c2]) / 2
+        // From simulator.h, cost_map[x][y] is a vector of costs for different robot types.
+        // cost_at(coord, type) returns cost_map[coord.x][coord.y][static_cast<size_t>(type)]
+        
+        // Ensure coordinates are within map bounds before accessing cost_map
+        // This check should ideally be part of a map utility or done by the caller (Dijkstra)
+        // For now, assume valid coords are passed or Dijkstra handles it.
+        int cost1 = cost_map[c1.x][c1.y][type_idx];
+        int cost2 = cost_map[c2.x][c2.y][type_idx];
 
-    Coord get_closest_unassigned_center(const Coord &drone_pos, const std::shared_ptr<ROBOT> &robot, const vector<vector<OBJECT>> &known_object_map);
-    void assign_new_exploration_target(const shared_ptr<ROBOT> &robot,
-                                       const vector<vector<OBJECT>> &known_object_map);
-
-    // Random movement helpers
-    Coord get_random_valid_neighbor(const Coord &current_pos, const vector<vector<OBJECT>> &known_object_map, int robot_id);
-    bool try_assign_random_move(const shared_ptr<ROBOT> &robot, const vector<vector<OBJECT>> &known_object_map);
+        if (cost1 == INFINITE || cost2 == INFINITE) {
+            return INFINITE;
+        }
+        return (cost1 + cost2) / 2;
+    }
+    
+    // Method to print the task_total_costs table
+    void print_task_total_costs_table(const vector<shared_ptr<ROBOT>>& all_robots, const vector<shared_ptr<TASK>>& all_tasks) const;
 };
 
-#endif /* SCHEDULER_H_ */
+#endif SCHEDULER_H_
