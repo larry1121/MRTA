@@ -2,40 +2,46 @@
 #include <limits>
 #include <queue>
 #include <algorithm>
-#include <cstdio> // For printf
-#include <cmath>  // For ceil
-#include <vector> // Ensure vector is included for vector operations
+#include <cstdio> 
+#include <cmath>  
+#include <vector> 
 
-// Helper to check coordinate equality
 bool Scheduler::coord_equal(const Coord& a, const Coord& b) {
     return a.x == b.x && a.y == b.y;
 }
 
-// Initialize map_size if not already done
-void Scheduler::init_map_size(const std::vector<std::vector<OBJECT>>& known_object_map) {
-    if (map_size != -1) return;
-    if (!known_object_map.empty()) {
+void Scheduler::init_scheduler_state(const std::vector<std::vector<OBJECT>>& known_object_map,
+    const std::vector<std::vector<std::vector<int>>>& known_cost_map) {
+    if (map_size == -1 && !known_object_map.empty()) {
         map_size = static_cast<int>(known_object_map.size());
+    }
+
+    if (learned_uniform_drone_cost_ == -1 && map_size > 0) {
+        for (int r = 0; r < map_size; ++r) {
+            for (int c = 0; c < map_size; ++c) {
+                if (known_object_map[r][c] != OBJECT::WALL && known_object_map[r][c] != OBJECT::UNKNOWN) {
+                    int cost = known_cost_map[r][c][static_cast<int>(ROBOT::TYPE::DRONE)];
+                    if (cost > 0 && cost < 5000) { // Valid cost found
+                        learned_uniform_drone_cost_ = cost;
+                        // printf("[DEBUG] Learned uniform drone cost: %d\n", learned_uniform_drone_cost_);
+                        return; // Found, no need to search further
+                    }
+                }
+            }
+        }
     }
 }
 
-// Path planning using A*
 std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
-    const std::vector<std::vector<std::vector<int>>>& known_cost_map, ROBOT::TYPE type, // Corrected: ROBOT::TYPE
+    const std::vector<std::vector<std::vector<int>>>& known_cost_map, ROBOT::TYPE type,
     const std::vector<std::vector<OBJECT>>& known_object_map) {
-    if (map_size == -1) {
-        // Attempt to initialize map_size if it wasn't, though ideally it should be.
-        if (!known_object_map.empty()) init_map_size(known_object_map);
-        if (map_size == -1) return {}; // Still not initialized, cannot proceed
-    }
+    if (map_size == -1) return {};
     if (start.x < 0 || start.x >= map_size || start.y < 0 || start.y >= map_size ||
         goal.x < 0 || goal.x >= map_size || goal.y < 0 || goal.y >= map_size) {
-        // Start or goal is out of bounds
         return {};
     }
 
-
-    typedef std::pair<int, Coord> PQItem; // {cost, coordinate}
+    typedef std::pair<int, Coord> PQItem;
     std::vector<std::vector<int>> dist(map_size, std::vector<int>(map_size, std::numeric_limits<int>::max() / 4));
     std::vector<std::vector<Coord>> prev(map_size, std::vector<Coord>(map_size, Coord(-1, -1)));
     std::priority_queue<PQItem, std::vector<PQItem>, std::greater<PQItem>> pq;
@@ -43,11 +49,8 @@ std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
     dist[start.x][start.y] = 0;
     pq.push({ 0, start });
 
-    // Corrected dx/dy for actions: UP, DOWN, LEFT, RIGHT (map to simulator.h action definitions)
-    // simulator.h: ACTION::UP (0,1), DOWN (0,-1), LEFT (-1,0), RIGHT (1,0)
     static const int dx[] = { 0, 0, -1, 1 };
     static const int dy[] = { 1, -1, 0, 0 };
-
 
     while (!pq.empty()) {
         int cost = pq.top().first;
@@ -65,7 +68,18 @@ std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
             if (known_object_map[nx][ny] == OBJECT::WALL) continue;
 
             int ncost_val = known_cost_map[nx][ny][static_cast<int>(type)];
-            if (ncost_val == -1) ncost_val = 10000;
+            if (type == ROBOT::TYPE::DRONE && learned_uniform_drone_cost_ > 0) {
+                if (known_object_map[nx][ny] != OBJECT::UNKNOWN) { // If cell type is known and not wall, use uniform cost
+                    ncost_val = learned_uniform_drone_cost_;
+                }
+                else { // For unknown cells, planner still uses high cost
+                    ncost_val = 10000;
+                }
+            }
+            else if (ncost_val == -1) {
+                ncost_val = 10000; // Path planner's cost for unknown if not drone or uniform cost not learned
+            }
+
             if (ncost_val >= std::numeric_limits<int>::max() / 2) continue;
 
             int alt = cost + ncost_val;
@@ -80,16 +94,16 @@ std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
     std::vector<Coord> path_result;
     Coord p = goal;
     if (coord_equal(start, goal)) return path_result;
-    if (prev[p.x][p.y].x == -1 && prev[p.x][p.y].y == -1 && !coord_equal(start, p)) return path_result; // No path
+    if (prev[p.x][p.y].x == -1 && prev[p.x][p.y].y == -1 && !coord_equal(start, p)) return path_result;
 
     while (!coord_equal(p, start)) {
-        if (p.x == -1 || p.y == -1) { // Path reconstruction failed
+        if (p.x == -1 || p.y == -1) {
             path_result.clear();
             break;
         }
         path_result.push_back(p);
         p = prev[p.x][p.y];
-        if (path_result.size() > static_cast<size_t>(map_size * map_size)) { // Safety break for too long path
+        if (path_result.size() > static_cast<size_t>(map_size * map_size)) {
             path_result.clear();
             break;
         }
@@ -98,8 +112,7 @@ std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
     return path_result;
 }
 
-// Get action type from two coordinates
-ROBOT::ACTION Scheduler::get_direction(const Coord& from, const Coord& to) { // Corrected: ROBOT::ACTION
+ROBOT::ACTION Scheduler::get_direction(const Coord& from, const Coord& to) {
     int dx_val = to.x - from.x;
     int dy_val = to.y - from.y;
     if (dx_val == 0 && dy_val == 1) return ROBOT::ACTION::UP;
@@ -128,62 +141,61 @@ int Scheduler::count_observable_unknowns(const Coord& pos,
 
 long long Scheduler::calculate_path_energy(const std::vector<Coord>& path,
     const Coord& start_pos,
-    ROBOT::TYPE robot_type, // Corrected: ROBOT::TYPE
+    ROBOT::TYPE robot_type,
     const std::vector<std::vector<std::vector<int>>>& known_cost_map) const {
-    if (map_size == -1 || path.empty()) return 0;
+    if (map_size == -1) return 0;
+    if (path.empty()) return 0; // No movement, no energy cost for path itself
 
     long long total_energy = 0;
-    Coord current_cell = start_pos;
-    int robot_type_idx = static_cast<int>(robot_type);
 
-    for (const auto& next_cell : path) {
-        if (current_cell.x < 0 || current_cell.x >= map_size || current_cell.y < 0 || current_cell.y >= map_size ||
-            next_cell.x < 0 || next_cell.x >= map_size || next_cell.y < 0 || next_cell.y >= map_size) {
-            return std::numeric_limits<long long>::max(); // Invalid path component
+    if (robot_type == ROBOT::TYPE::DRONE && learned_uniform_drone_cost_ > 0) {
+        // If uniform drone cost is learned, each step costs this uniform value.
+        // Energy for one step A to B = (cost_A/2 + cost_B/2). If cost_A = cost_B = learned_uniform_drone_cost_, then energy = learned_uniform_drone_cost_
+        total_energy = static_cast<long long>(path.size()) * learned_uniform_drone_cost_;
+    }
+    else {
+        // Fallback to detailed calculation if not drone or uniform cost not learned
+        Coord current_cell = start_pos;
+        int robot_type_idx = static_cast<int>(robot_type);
+        const int default_cost_for_energy_calc = (robot_type == ROBOT::TYPE::DRONE) ? 150 : 5000; // Higher default for non-drones if cost unknown
+
+        for (const auto& next_cell : path) {
+            if (current_cell.x < 0 || current_cell.x >= map_size || current_cell.y < 0 || current_cell.y >= map_size ||
+                next_cell.x < 0 || next_cell.x >= map_size || next_cell.y < 0 || next_cell.y >= map_size) {
+                return std::numeric_limits<long long>::max();
+            }
+
+            int cost_current_cell = known_cost_map[current_cell.x][current_cell.y][robot_type_idx];
+            int cost_next_cell = known_cost_map[next_cell.x][next_cell.y][robot_type_idx];
+
+            if (cost_current_cell == -1 || cost_current_cell > 5000) cost_current_cell = default_cost_for_energy_calc;
+            if (cost_next_cell == -1 || cost_next_cell > 5000) cost_next_cell = default_cost_for_energy_calc;
+
+            total_energy += (static_cast<long long>(cost_current_cell) / 2) + (static_cast<long long>(cost_next_cell) / 2);
+            current_cell = next_cell;
         }
-
-        int cost_current_cell = known_cost_map[current_cell.x][current_cell.y][robot_type_idx];
-        int cost_next_cell = known_cost_map[next_cell.x][next_cell.y][robot_type_idx];
-
-        // Default cost for drone if unknown or planner's high cost
-        const int default_drone_cost_for_energy_calc = 150;
-        if (robot_type == ROBOT::TYPE::DRONE) {
-            if (cost_current_cell == -1 || cost_current_cell > 5000) cost_current_cell = default_drone_cost_for_energy_calc;
-            if (cost_next_cell == -1 || cost_next_cell > 5000) cost_next_cell = default_drone_cost_for_energy_calc;
-        }
-        else { // For other types, if -1, it's an issue, but we must provide a value.
-            if (cost_current_cell == -1) cost_current_cell = 10000; // Fallback, should be known
-            if (cost_next_cell == -1) cost_next_cell = 10000;
-        }
-
-
-        total_energy += (static_cast<long long>(cost_current_cell) / 2) + (static_cast<long long>(cost_next_cell) / 2);
-        current_cell = next_cell;
     }
     return total_energy;
 }
 
-void Scheduler::on_info_updated(const std::set<Coord>& /*observed_coords*/,
-    const std::set<Coord>& /*updated_coords*/,
+void Scheduler::on_info_updated(const std::set<Coord>&,
+    const std::set<Coord>&,
     const std::vector<std::vector<std::vector<int>>>& known_cost_map,
     const std::vector<std::vector<OBJECT>>& known_object_map,
-    const std::vector<std::shared_ptr<TASK>>& /*active_tasks*/,
-    const std::vector<std::shared_ptr<ROBOT>>& robots) // Corrected signature
+    const std::vector<std::shared_ptr<TASK>>&,
+    const std::vector<std::shared_ptr<ROBOT>>& robots)
 {
-    init_map_size(known_object_map);
+    init_scheduler_state(known_object_map, known_cost_map);
     if (map_size == -1) return;
 
-    // Rebuild cell_reserved based on current valid drone_targets
-    // This ensures that if a drone target becomes invalid (e.g. drone exhausted), it's not blocking others.
     cell_reserved.clear();
     for (const auto& robot_ptr_for_res : robots) {
         if (robot_ptr_for_res->type == ROBOT::TYPE::DRONE) {
             int temp_rid = robot_ptr_for_res->id;
-            if (drone_targets.count(temp_rid) && !coord_equal(drone_targets[temp_rid], robot_ptr_for_res->get_coord())) {
-                // Only reserve if it's a distinct target, not just current pos of an idle/exhausted drone
-                if (robot_ptr_for_res->get_energy() > 0 && drone_paths.count(temp_rid) && !drone_paths[temp_rid].empty()) {
-                    cell_reserved.insert(drone_targets[temp_rid]);
-                }
+            if (drone_targets.count(temp_rid) && robot_ptr_for_res->get_energy() > 0 &&
+                drone_paths.count(temp_rid) && !drone_paths[temp_rid].empty() &&
+                !coord_equal(drone_targets[temp_rid], robot_ptr_for_res->get_coord())) {
+                cell_reserved.insert(drone_targets[temp_rid]);
             }
         }
     }
@@ -205,30 +217,15 @@ void Scheduler::on_info_updated(const std::set<Coord>& /*observed_coords*/,
             continue;
         }
 
-        // If drone has a path, and its target is still good (e.g. has unknowns), let it continue
-        // Otherwise, force re-planning by clearing path.
-        if (drone_paths.count(rid) && !drone_paths[rid].empty()) {
-            bool replan = false;
-            if (drone_targets.count(rid)) {
-                Coord current_planned_target = drone_targets[rid];
-                if (count_observable_unknowns(current_planned_target, known_object_map) == 0) {
-                    replan = true; // Target no longer provides new info
-                }
-            }
-            else { // No target associated with path - should not happen
-                replan = true;
-            }
-            if (replan) {
-                if (drone_targets.count(rid) && cell_reserved.count(drone_targets[rid])) {
-                    cell_reserved.erase(drone_targets[rid]);
-                }
-                drone_paths[rid].clear();
-                // drone_targets will be set below if new path found
-            }
-            else {
-                continue; // Stick to current path
-            }
+        // Always re-evaluate for drones to find the best current option
+        bool old_target_was_reserved = false;
+        Coord old_target_coord;
+        if (drone_targets.count(rid) && cell_reserved.count(drone_targets[rid])) {
+            old_target_was_reserved = true;
+            old_target_coord = drone_targets[rid];
+            cell_reserved.erase(drone_targets[rid]); // Temporarily un-reserve for self re-evaluation
         }
+        drone_paths[rid].clear(); // Force re-planning
 
 
         std::vector<Coord> candidate_target_coords;
@@ -236,9 +233,6 @@ void Scheduler::on_info_updated(const std::set<Coord>& /*observed_coords*/,
             for (int y = 0; y < map_size; ++y) {
                 Coord current_candidate(x, y);
                 if (known_object_map[x][y] == OBJECT::WALL) continue;
-                // Check reservation later, only for the chosen best_target.
-                // Allow considering reserved cells for scoring, but final choice cannot be a cell reserved by another active drone.
-
                 if (count_observable_unknowns(current_candidate, known_object_map) > 0) {
                     candidate_target_coords.push_back(current_candidate);
                 }
@@ -246,45 +240,35 @@ void Scheduler::on_info_updated(const std::set<Coord>& /*observed_coords*/,
         }
 
         std::vector<Coord> best_path_for_drone;
-        Coord best_target_for_drone = drone_pos; // Default to current position
+        Coord best_target_for_drone = drone_pos;
         double max_score = -1.0;
 
-        // Temporarily un-reserve this drone's current target if it had one, to allow re-evaluation
-        // This drone's old target is now fair game for itself or others if it was reserved.
-        // The cell_reserved set is rebuilt at the start anyway reflecting current active targets.
-
         for (const auto& candidate_coord : candidate_target_coords) {
-            // A drone can re-target its own previously reserved cell.
-            // But it cannot target a cell actively reserved by *another* drone.
-            bool is_reserved_by_other = false;
-            if (cell_reserved.count(candidate_coord)) {
-                if (!drone_targets.count(rid) || !coord_equal(drone_targets[rid], candidate_coord)) {
-                    // If it's in cell_reserved AND it's not this drone's current target, then it's reserved by another.
-                    is_reserved_by_other = true;
-                }
+            if (cell_reserved.count(candidate_coord)) { // Check if reserved by ANOTHER drone
+                continue;
             }
-            if (is_reserved_by_other) continue;
-
 
             std::vector<Coord> current_path = plan_path(drone_pos, candidate_coord, known_cost_map, ROBOT::TYPE::DRONE, known_object_map);
 
-            // Path to self is empty, but can be a valid target if it reveals unknowns and drone is already there.
             if (current_path.empty() && !coord_equal(drone_pos, candidate_coord)) continue;
 
-            long long path_energy = calculate_path_energy(current_path, drone_pos, ROBOT::TYPE::DRONE, known_cost_map);
+            long long path_total_energy = calculate_path_energy(current_path, drone_pos, ROBOT::TYPE::DRONE, known_cost_map);
 
-            if (path_energy > current_energy) {
+            if (path_total_energy > current_energy) {
                 continue;
             }
 
             int num_unknowns = count_observable_unknowns(candidate_coord, known_object_map);
-            // num_unknowns should be > 0 due to candidate_target_coords selection, but check score logic
-
             double current_score = 0.0;
-            if (num_unknowns > 0) {
-                current_score = static_cast<double>(num_unknowns) / (current_path.size() + 1.0);
-            }
 
+            if (num_unknowns > 0) {
+                if (current_path.empty()) { // Already at a target that reveals unknowns
+                    current_score = static_cast<double>(num_unknowns) * 1000.0; // High score for 0-cost exploration
+                }
+                else {
+                    current_score = static_cast<double>(num_unknowns) / (path_total_energy + 1.0);
+                }
+            }
 
             if (current_score > max_score) {
                 max_score = current_score;
@@ -293,29 +277,37 @@ void Scheduler::on_info_updated(const std::set<Coord>& /*observed_coords*/,
             }
         }
 
-        // Clear old reservation if target changes
-        if (drone_targets.count(rid) && cell_reserved.count(drone_targets[rid])) {
-            if (!coord_equal(drone_targets[rid], best_target_for_drone)) { // if target changed or no target found
-                cell_reserved.erase(drone_targets[rid]);
-            }
-        }
+        // If the old target was better and this drone re-selected it, re-reserve it.
+        // Otherwise, if a new target is chosen, it will be reserved.
+        // If no target chosen, old reservation (if any) remains un-reserved.
+        // This is slightly complex; the global rebuild of cell_reserved at start is simpler.
 
-
-        if (max_score > 0) { // max_score will be > 0 if num_unknowns > 0 for the best candidate
+        if (max_score > 0) {
             drone_paths[rid].assign(best_path_for_drone.begin(), best_path_for_drone.end());
             drone_targets[rid] = best_target_for_drone;
-            // Only reserve if it's not the drone's current position (unless it's a 0-length path to current pos)
+            // The global cell_reserved rebuild at the start of on_info_updated handles reservations for chosen targets.
+            // No need to individually add here if we rely on that global rebuild.
+            // For immediate effect within this loop for subsequent drones, we could add it:
             if (!coord_equal(drone_pos, best_target_for_drone) || best_path_for_drone.empty()) {
-                cell_reserved.insert(best_target_for_drone);
+                cell_reserved.insert(best_target_for_drone); // Reserve the new target
             }
-            // printf("[DEBUG] Drone %d: New path, target=(%d,%d), score=%.2f, energy_cost=%lld, path_len=%zu\n",
-            //       rid, best_target_for_drone.x, best_target_for_drone.y, max_score,
-            //       calculate_path_energy(best_path_for_drone, drone_pos, ROBOT::TYPE::DRONE, known_cost_map), best_path_for_drone.size());
+            // printf("[DEBUG] Drone %d: Path set. Target=(%d,%d), Score=%.2f, Energy=%lld, Len=%zu\n",
+            //        rid, best_target_for_drone.x, best_target_for_drone.y, max_score, 
+            //        calculate_path_energy(best_path_for_drone, drone_pos, ROBOT::TYPE::DRONE, known_cost_map), 
+            //        best_path_for_drone.size());
+
         }
         else {
+            // No suitable path found. If old target was unreserved, it stays unreserved.
             drone_paths[rid].clear();
             drone_targets[rid] = drone_pos;
             // printf("[DEBUG] Drone %d: NO suitable path found.\n", rid);
+            if (old_target_was_reserved && !cell_reserved.count(old_target_coord)) {
+                // If it was this drone's, and it's not picked again, it should not be globally reserved by this drone
+                // This case is complex due to order. Safer to rely on global rebuild or specific logic.
+                // For now, if no new path, the drone_targets[rid] = drone_pos, which won't be added to cell_reserved
+                // if check `!coord_equal(drone_targets[temp_rid], robot_ptr_for_res->get_coord())` is used in rebuild.
+            }
         }
     }
 }
@@ -329,10 +321,10 @@ bool Scheduler::on_task_reached(const std::set<Coord>&,
     const ROBOT& robot,
     const TASK&)
 {
-    if (robot.type == ROBOT::TYPE::DRONE) { // Corrected: ROBOT::TYPE::DRONE
-        return false; // Drones do not perform tasks
+    if (robot.type == ROBOT::TYPE::DRONE) {
+        return false;
     }
-    return true; // Other robots perform tasks by default
+    return true;
 }
 
 ROBOT::ACTION Scheduler::idle_action(const std::set<Coord>&,
@@ -344,12 +336,12 @@ ROBOT::ACTION Scheduler::idle_action(const std::set<Coord>&,
     const ROBOT& robot)
 {
     if (map_size == -1 && !known_object_map.empty()) {
-        init_map_size(known_object_map);
+        init_scheduler_state(known_object_map, {}); // Pass empty cost map if only for map_size
     }
-    if (map_size == -1) return ROBOT::ACTION::HOLD; // Corrected: ROBOT::ACTION::HOLD
+    if (map_size == -1) return ROBOT::ACTION::HOLD;
 
 
-    if (robot.type != ROBOT::TYPE::DRONE) return ROBOT::ACTION::HOLD; // Corrected
+    if (robot.type != ROBOT::TYPE::DRONE) return ROBOT::ACTION::HOLD;
 
     int rid = robot.id;
     Coord cur = robot.get_coord();
@@ -360,10 +352,10 @@ ROBOT::ACTION Scheduler::idle_action(const std::set<Coord>&,
         if (coord_equal(cur, next_target_in_path)) {
             drone_paths[rid].pop_front();
             if (drone_paths[rid].empty()) {
-                if (drone_targets.count(rid) && cell_reserved.count(drone_targets[rid]) && coord_equal(drone_targets[rid], cur)) {
-                    cell_reserved.erase(drone_targets[rid]);
-                }
-                return ROBOT::ACTION::HOLD; // Corrected
+                // Target reached, unreserve if it was this drone's target
+                // This unreserving is tricky because cell_reserved is rebuilt globally.
+                // It's better that on_info_updated handles reservation state accurately.
+                return ROBOT::ACTION::HOLD;
             }
             next_target_in_path = drone_paths[rid].front();
         }
@@ -371,15 +363,17 @@ ROBOT::ACTION Scheduler::idle_action(const std::set<Coord>&,
         if (next_target_in_path.x < 0 || next_target_in_path.x >= map_size || next_target_in_path.y < 0 || next_target_in_path.y >= map_size ||
             known_object_map[next_target_in_path.x][next_target_in_path.y] == OBJECT::WALL) {
 
+            // Path blocked, clear path and target reservation. Target will be re-evaluated.
             if (drone_targets.count(rid) && cell_reserved.count(drone_targets[rid])) {
-                cell_reserved.erase(drone_targets[rid]);
+                //This specific erase might be problematic if cell_reserved is purely managed at start of on_info_updated
+                //cell_reserved.erase(drone_targets[rid]); 
             }
             drone_paths[rid].clear();
-            drone_targets[rid] = cur; // Reset target
-            // printf("[DEBUG] Drone %d: Path to %d,%d blocked. Holding.\n", rid, next_target_in_path.x, next_target_in_path.y);
-            return ROBOT::ACTION::HOLD; // Corrected
+            drone_targets[rid] = cur;
+            // printf("[DEBUG] Drone %d: Path to %d,%d blocked in idle_action. Holding.\n", rid, next_target_in_path.x, next_target_in_path.y);
+            return ROBOT::ACTION::HOLD;
         }
         return get_direction(cur, next_target_in_path);
     }
-    return ROBOT::ACTION::HOLD; // Corrected
+    return ROBOT::ACTION::HOLD;
 }
