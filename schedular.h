@@ -26,6 +26,34 @@ struct PathInfo {
 class Scheduler
 {
 public:
+    // Algorithm selection enum
+    enum class Algorithm {
+        MIN_MIN,    // Original algorithm
+        SUFFERAGE,  // Sufferage algorithm
+        OLB         // Opportunistic Load Balancing algorithm
+    };
+
+    // Constructor to set initial algorithm
+    Scheduler(Algorithm initial_algorithm = Algorithm::MIN_MIN) : current_algorithm(initial_algorithm) {}
+
+    // Method to toggle algorithm
+    void toggle_algorithm() {
+        switch (current_algorithm) {
+            case Algorithm::MIN_MIN:
+                current_algorithm = Algorithm::SUFFERAGE;
+                break;
+            case Algorithm::SUFFERAGE:
+                current_algorithm = Algorithm::OLB;
+                break;
+            case Algorithm::OLB:
+                current_algorithm = Algorithm::MIN_MIN;
+                break;
+        }
+    }
+
+    // Method to get current algorithm
+    Algorithm get_current_algorithm() const { return current_algorithm; }
+
     void on_info_updated(const set<Coord> &observed_coords,
                          const set<Coord> &updated_coords,
                          const vector<vector<vector<int>>> &known_cost_map,
@@ -51,6 +79,9 @@ public:
                               const ROBOT &robot);
 
 private:
+    // Current algorithm selection
+    Algorithm current_algorithm;
+
     // Robot_id -> goal_coord -> PathInfo
     std::map<int, std::map<Coord, PathInfo>> path_cache;
 
@@ -100,6 +131,58 @@ private:
     
     // Helper to check if map is fully revealed
     bool is_map_fully_revealed(const vector<vector<OBJECT>>& known_object_map) const;
+
+    // Helper functions for task assignment
+    bool is_task_available(const TASK& task,
+                          const std::map<int, bool>& task_newly_assigned_map) const {
+        return !task.is_done() && !task_newly_assigned_map.count(task.id);
+    }
+
+    bool is_robot_available(const ROBOT& robot,
+                           const std::map<int, bool>& robot_newly_assigned_map) const {
+        return robot.type != ROBOT::TYPE::DRONE &&
+               robot.get_status() != ROBOT::STATUS::EXHAUSTED &&
+               !robotToTask.count(robot.id) &&
+               !robot_newly_assigned_map.count(robot.id);
+    }
+
+    bool is_task_already_assigned(int task_id) const {
+        for (const auto& [robot_id, assigned_task_id] : robotToTask) {
+            if (assigned_task_id == task_id) return true;
+        }
+        return false;
+    }
+
+    // New method to mark task as done and update related maps
+    void mark_task_as_done(int task_id,
+                          std::map<int, bool>& task_newly_assigned_map,
+                          const vector<shared_ptr<TASK>>& active_tasks) {
+        // Add to newly assigned map to prevent further assignments
+        task_newly_assigned_map[task_id] = true;
+    }
+
+    bool can_assign_task_to_robot(int robot_id, int task_id,
+                                 const std::map<int, bool>& robot_newly_assigned_map,
+                                 const std::map<int, bool>& task_newly_assigned_map) const {
+        // Check if robot is already assigned
+        if (robotToTask.count(robot_id) || robot_newly_assigned_map.count(robot_id)) {
+            return false;
+        }
+        
+        // Check if task is already assigned
+        if (is_task_already_assigned(task_id) || task_newly_assigned_map.count(task_id)) {
+            return false;
+        }
+        
+        // Check if cost information exists and is valid
+        if (!task_total_costs.count(robot_id) ||
+            !task_total_costs.at(robot_id).count(task_id) ||
+            task_total_costs.at(robot_id).at(task_id) == std::numeric_limits<int>::max()) {
+            return false;
+        }
+        
+        return true;
+    }
 
 public:
     // Static helper function for move cost
