@@ -156,8 +156,27 @@ void Scheduler::on_info_updated(const set<Coord> &,
                                 const std::vector<std::shared_ptr<TASK>> &,
                                 const std::vector<std::shared_ptr<ROBOT>> &robots)
 {
+    // 매번 호출될 때마다 시간 증가 (on_info_updated는 매 틱마다 호출됨)
+    current_time++;
+
     init_tiles(known_object_map);
     update_tile_info(known_object_map);
+
+    // 탐색 시간이 아니면 드론들을 정지시킴
+    if (!is_exploration_time())
+    {
+        for (const auto &robot_ptr : robots)
+        {
+            if (robot_ptr->type == ROBOT::TYPE::DRONE)
+            {
+                int rid = robot_ptr->id;
+                drone_paths[rid].clear();
+                drone_targets[rid] = robot_ptr->get_coord();
+                printf("[DEBUG] Drone %d: PAUSED (time=%d)\n", rid, current_time);
+            }
+        }
+        return;
+    }
 
     // 이전 할당 정보 초기화
     assigned_targets.clear();
@@ -276,14 +295,14 @@ void Scheduler::on_info_updated(const set<Coord> &,
             drone_paths[rid] = std::deque<Coord>(best_path.begin(), best_path.end());
             drone_targets[rid] = best_center;
             assigned_targets.insert({best_center.x, best_center.y}); // 타겟 할당 기록
-            printf("[DEBUG] Drone %d: path=%zu, target=(%d,%d), score=%.3f\n",
-                   rid, best_path.size(), best_center.x, best_center.y, best_score);
+            printf("[DEBUG] Drone %d: path=%zu, target=(%d,%d), score=%.3f (time=%d)\n",
+                   rid, best_path.size(), best_center.x, best_center.y, best_score, current_time);
         }
         else
         {
             drone_paths[rid].clear();
             drone_targets[rid] = drone_pos;
-            printf("[DEBUG] Drone %d: NO path (stay)\n", rid);
+            printf("[DEBUG] Drone %d: NO path (stay) (time=%d)\n", rid, current_time);
         }
     }
 }
@@ -310,6 +329,11 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &,
 {
     if (robot.type != ROBOT::TYPE::DRONE)
         return ROBOT::ACTION::HOLD;
+
+    // 탐색 시간이 아니면 정지
+    if (!is_exploration_time())
+        return ROBOT::ACTION::HOLD;
+
     int rid = robot.id;
     Coord cur = robot.get_coord();
     if (drone_paths.count(rid) && !drone_paths[rid].empty())
@@ -326,4 +350,10 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &,
         }
     }
     return ROBOT::ACTION::HOLD;
+}
+
+bool Scheduler::is_exploration_time() const
+{
+    // 0~750틱과 1250틱 이후에만 탐색
+    return (current_time <= 750) || (current_time >= 1250);
 }
