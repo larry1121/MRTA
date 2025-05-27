@@ -85,6 +85,65 @@ std::vector<Coord> Scheduler::plan_path(const Coord &start, const Coord &goal,
                                         const std::vector<std::vector<std::vector<int>>> &known_cost_map, ROBOT::TYPE type,
                                         const std::vector<std::vector<OBJECT>> &known_object_map)
 {
+    // 드론의 경우 BFS 사용 (모든 간선 가중치가 1)
+    if (type == ROBOT::TYPE::DRONE)
+    {
+        std::vector<std::vector<bool>> visited(map_size, std::vector<bool>(map_size, false));
+        std::vector<std::vector<Coord>> prev(map_size, std::vector<Coord>(map_size, Coord(-1, -1)));
+        std::queue<Coord> q;
+
+        visited[start.x][start.y] = true;
+        q.push(start);
+
+        static const int dx[4] = {0, 0, -1, 1}, dy[4] = {1, -1, 0, 0};
+
+        while (!q.empty())
+        {
+            Coord cur = q.front();
+            q.pop();
+
+            if (coord_equal(cur, goal))
+                break;
+
+            for (int dir = 0; dir < 4; ++dir)
+            {
+                int nx = cur.x + dx[dir], ny = cur.y + dy[dir];
+                if (nx < 0 || ny < 0 || nx >= map_size || ny >= map_size)
+                    continue;
+                if (known_object_map[nx][ny] == OBJECT::WALL)
+                    continue;
+                if (visited[nx][ny])
+                    continue;
+
+                // 드론의 경우 알려지지 않은 영역도 이동 가능 (비용 1)
+                int ncost = known_cost_map[nx][ny][static_cast<int>(type)];
+                if (ncost != -1 && ncost >= std::numeric_limits<int>::max() / 2)
+                    continue;
+
+                visited[nx][ny] = true;
+                prev[nx][ny] = cur;
+                q.push(Coord(nx, ny));
+            }
+        }
+
+        // 경로 재구성
+        std::vector<Coord> path;
+        Coord p = goal;
+        if (prev[p.x][p.y].x == -1 && prev[p.x][p.y].y == -1 && !coord_equal(start, goal))
+            return path; // 경로 없음
+
+        while (!coord_equal(p, start))
+        {
+            if (known_object_map[p.x][p.y] == OBJECT::WALL)
+                return std::vector<Coord>();
+            path.push_back(p);
+            p = prev[p.x][p.y];
+        }
+        std::reverse(path.begin(), path.end());
+        return path;
+    }
+
+    // 다른 로봇 타입의 경우 기존 다익스트라 알고리즘 사용
     typedef std::pair<int, Coord> PQItem;
     std::vector<std::vector<int>> dist(map_size, std::vector<int>(map_size, std::numeric_limits<int>::max() / 4));
     std::vector<std::vector<Coord>> prev(map_size, std::vector<Coord>(map_size, Coord(-1, -1)));
