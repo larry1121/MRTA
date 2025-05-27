@@ -1,35 +1,50 @@
-#include "schedular.h"
+ï»¿#include "schedular.h"
 #include <limits>
 #include <queue>
 #include <algorithm>
 #include <cstdio>
+#include <tuple>
+#include <cmath>
 
-bool Scheduler::coord_equal(const Coord& a, const Coord& b) {
+bool Scheduler::coord_equal(const Coord &a, const Coord &b)
+{
     return a.x == b.x && a.y == b.y;
 }
 
-void Scheduler::init_tiles(const std::vector<std::vector<OBJECT>>& known_object_map) {
-    if (map_size != -1) return;
+void Scheduler::init_tiles(const std::vector<std::vector<OBJECT>> &known_object_map)
+{
+    if (map_size != -1)
+        return;
     map_size = static_cast<int>(known_object_map.size());
     tile_rows = (map_size + tile_size - 1) / tile_size;
     tile_cols = (map_size + tile_size - 1) / tile_size;
     tiles.resize(tile_rows, std::vector<TileInfo>(tile_cols));
-    for (int i = 0; i < tile_rows; ++i) {
-        for (int j = 0; j < tile_cols; ++j) {
+    for (int i = 0; i < tile_rows; ++i)
+    {
+        for (int j = 0; j < tile_cols; ++j)
+        {
             int cx = j * tile_size + tile_range;
             int cy = i * tile_size + tile_range;
-            if (cx >= map_size) cx = map_size - 1;
-            if (cy >= map_size) cy = map_size - 1;
-            // Áß½ÉÀÌ º®ÀÌ¸é ÁÖº¯ ºó Ä­ Ã£±â
-            if (known_object_map[cx][cy] == OBJECT::WALL) {
+            if (cx >= map_size)
+                cx = map_size - 1;
+            if (cy >= map_size)
+                cy = map_size - 1;
+            // ê²½ê³„ ë‚´ ê°€ì¥ ê°€ê¹Œìš´ ë²½ì´ ì•„ë‹Œ ìœ„ì¹˜ ì°¾ê¸°
+            if (known_object_map[cx][cy] == OBJECT::WALL)
+            {
                 bool found = false;
-                for (int dist = 1; dist <= tile_range + 1 && !found; ++dist) {
-                    for (int dx = -dist; dx <= dist && !found; ++dx) {
-                        for (int dy = -dist; dy <= dist && !found; ++dy) {
+                for (int dist = 1; dist <= tile_range + 1 && !found; ++dist)
+                {
+                    for (int dx = -dist; dx <= dist && !found; ++dx)
+                    {
+                        for (int dy = -dist; dy <= dist && !found; ++dy)
+                        {
                             int nx = cx + dx, ny = cy + dy;
-                            if (nx >= 0 && nx < map_size && ny >= 0 && ny < map_size
-                                && known_object_map[nx][ny] != OBJECT::WALL) {
-                                cx = nx; cy = ny; found = true;
+                            if (nx >= 0 && nx < map_size && ny >= 0 && ny < map_size && known_object_map[nx][ny] != OBJECT::WALL)
+                            {
+                                cx = nx;
+                                cy = ny;
+                                found = true;
                             }
                         }
                     }
@@ -40,16 +55,22 @@ void Scheduler::init_tiles(const std::vector<std::vector<OBJECT>>& known_object_
     }
 }
 
-void Scheduler::update_tile_info(const std::vector<std::vector<OBJECT>>& known_object_map) {
-    for (int i = 0; i < tile_rows; ++i) {
-        for (int j = 0; j < tile_cols; ++j) {
+void Scheduler::update_tile_info(const std::vector<std::vector<OBJECT>> &known_object_map)
+{
+    for (int i = 0; i < tile_rows; ++i)
+    {
+        for (int j = 0; j < tile_cols; ++j)
+        {
             int ux = tiles[i][j].center.x - tile_range;
             int uy = tiles[i][j].center.y - tile_range;
             int unseen = 0;
-            for (int dx = 0; dx < tile_size; ++dx) {
-                for (int dy = 0; dy < tile_size; ++dy) {
+            for (int dx = 0; dx < tile_size; ++dx)
+            {
+                for (int dy = 0; dy < tile_size; ++dy)
+                {
                     int x = ux + dx, y = uy + dy;
-                    if (x >= 0 && x < map_size && y >= 0 && y < map_size) {
+                    if (x >= 0 && x < map_size && y >= 0 && y < map_size)
+                    {
                         if (known_object_map[x][y] == OBJECT::UNKNOWN)
                             unseen++;
                     }
@@ -60,30 +81,39 @@ void Scheduler::update_tile_info(const std::vector<std::vector<OBJECT>>& known_o
     }
 }
 
-std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
-    const std::vector<std::vector<std::vector<int>>>& known_cost_map, ROBOT::TYPE type,
-    const std::vector<std::vector<OBJECT>>& known_object_map) {
+std::vector<Coord> Scheduler::plan_path(const Coord &start, const Coord &goal,
+                                        const std::vector<std::vector<std::vector<int>>> &known_cost_map, ROBOT::TYPE type,
+                                        const std::vector<std::vector<OBJECT>> &known_object_map)
+{
     typedef std::pair<int, Coord> PQItem;
     std::vector<std::vector<int>> dist(map_size, std::vector<int>(map_size, std::numeric_limits<int>::max() / 4));
     std::vector<std::vector<Coord>> prev(map_size, std::vector<Coord>(map_size, Coord(-1, -1)));
     std::priority_queue<PQItem, std::vector<PQItem>, std::greater<PQItem>> pq;
     dist[start.x][start.y] = 0;
     pq.push(std::make_pair(0, start));
-    static const int dx[4] = { 0,0,-1,1 }, dy[4] = { 1,-1,0,0 };
-    while (!pq.empty()) {
+    static const int dx[4] = {0, 0, -1, 1}, dy[4] = {1, -1, 0, 0};
+    while (!pq.empty())
+    {
         int cost = pq.top().first;
         Coord cur = pq.top().second;
         pq.pop();
-        if (coord_equal(cur, goal)) break;
-        for (int dir = 0; dir < 4; ++dir) {
+        if (coord_equal(cur, goal))
+            break;
+        for (int dir = 0; dir < 4; ++dir)
+        {
             int nx = cur.x + dx[dir], ny = cur.y + dy[dir];
-            if (nx < 0 || ny < 0 || nx >= map_size || ny >= map_size) continue;
-            if (known_object_map[nx][ny] == OBJECT::WALL) continue;
+            if (nx < 0 || ny < 0 || nx >= map_size || ny >= map_size)
+                continue;
+            if (known_object_map[nx][ny] == OBJECT::WALL)
+                continue;
             int ncost = known_cost_map[nx][ny][static_cast<int>(type)];
-            if (ncost == -1) ncost = 10000; // ¹ÌÈ®ÀÎ ¿µ¿ª ÁøÀÔ °­Á¦ Çã¿ë!
-            if (ncost >= std::numeric_limits<int>::max() / 2) continue;
+            if (ncost == -1)
+                ncost = 10000; // ì˜ˆì™¸ ì²˜ë¦¬ í•„ìš”!
+            if (ncost >= std::numeric_limits<int>::max() / 2)
+                continue;
             int alt = cost + ncost;
-            if (alt < dist[nx][ny]) {
+            if (alt < dist[nx][ny])
+            {
                 dist[nx][ny] = alt;
                 prev[nx][ny] = cur;
                 pq.push(std::make_pair(alt, Coord(nx, ny)));
@@ -92,9 +122,12 @@ std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
     }
     std::vector<Coord> path;
     Coord p = goal;
-    if (prev[p.x][p.y].x == -1 && prev[p.x][p.y].y == -1) return path;
-    while (!coord_equal(p, start)) {
-        if (known_object_map[p.x][p.y] == OBJECT::WALL) return std::vector<Coord>();
+    if (prev[p.x][p.y].x == -1 && prev[p.x][p.y].y == -1)
+        return path;
+    while (!coord_equal(p, start))
+    {
+        if (known_object_map[p.x][p.y] == OBJECT::WALL)
+            return std::vector<Coord>();
         path.push_back(p);
         p = prev[p.x][p.y];
     }
@@ -102,70 +135,152 @@ std::vector<Coord> Scheduler::plan_path(const Coord& start, const Coord& goal,
     return path;
 }
 
-ROBOT::ACTION Scheduler::get_direction(const Coord& from, const Coord& to) {
+ROBOT::ACTION Scheduler::get_direction(const Coord &from, const Coord &to)
+{
     int dx = to.x - from.x, dy = to.y - from.y;
-    if (dx == 0 && dy == 1) return ROBOT::ACTION::UP;
-    if (dx == 0 && dy == -1) return ROBOT::ACTION::DOWN;
-    if (dx == -1 && dy == 0) return ROBOT::ACTION::LEFT;
-    if (dx == 1 && dy == 0) return ROBOT::ACTION::RIGHT;
+    if (dx == 0 && dy == 1)
+        return ROBOT::ACTION::UP;
+    if (dx == 0 && dy == -1)
+        return ROBOT::ACTION::DOWN;
+    if (dx == -1 && dy == 0)
+        return ROBOT::ACTION::LEFT;
+    if (dx == 1 && dy == 0)
+        return ROBOT::ACTION::RIGHT;
     return ROBOT::ACTION::HOLD;
 }
 
-void Scheduler::on_info_updated(const set<Coord>&,
-    const set<Coord>&,
-    const std::vector<std::vector<std::vector<int>>>& known_cost_map,
-    const std::vector<std::vector<OBJECT>>& known_object_map,
-    const std::vector<std::shared_ptr<TASK>>&,
-    const std::vector<std::shared_ptr<ROBOT>>& robots)
+void Scheduler::on_info_updated(const set<Coord> &,
+                                const set<Coord> &,
+                                const std::vector<std::vector<std::vector<int>>> &known_cost_map,
+                                const std::vector<std::vector<OBJECT>> &known_object_map,
+                                const std::vector<std::shared_ptr<TASK>> &,
+                                const std::vector<std::shared_ptr<ROBOT>> &robots)
 {
     init_tiles(known_object_map);
     update_tile_info(known_object_map);
 
-    int n_drones = 0;
-    for (const auto& r : robots) if (r->type == ROBOT::TYPE::DRONE) ++n_drones;
+    // ì´ì „ í• ë‹¹ ì •ë³´ ì´ˆê¸°í™”
+    assigned_targets.clear();
 
-    for (const auto& robot_ptr : robots) {
-        if (robot_ptr->type != ROBOT::TYPE::DRONE) continue;
+    int n_drones = 0;
+    for (const auto &r : robots)
+        if (r->type == ROBOT::TYPE::DRONE)
+            ++n_drones;
+
+    // ë“œë¡ ë“¤ì„ ID ìˆœìœ¼ë¡œ ì •ë ¬í•˜ì—¬ ì¼ê´€ëœ ìˆœì„œë¡œ íƒ€ê²Ÿ í• ë‹¹
+    std::vector<std::shared_ptr<ROBOT>> drone_robots;
+    for (const auto &robot_ptr : robots)
+    {
+        if (robot_ptr->type == ROBOT::TYPE::DRONE)
+            drone_robots.push_back(robot_ptr);
+    }
+    std::sort(drone_robots.begin(), drone_robots.end(),
+              [](const std::shared_ptr<ROBOT> &a, const std::shared_ptr<ROBOT> &b)
+              {
+                  return a->id < b->id;
+              });
+
+    for (const auto &robot_ptr : drone_robots)
+    {
         int rid = robot_ptr->id;
         Coord drone_pos = robot_ptr->get_coord();
 
-        // Ç×»ó ´ÙÀ½ Å¸ÀÏ Áß½É ¸ñÇ¥ ¼±Á¤(== '³²Àº ¿¡³ÊÁö ¸ğµÎ ¼Ò¸ğ' Àû±Ø Å½»ö)
+        // í˜„ì¬ ë“œë¡ ì´ ì´ë™ ì¤‘ì´ê³  ëª©í‘œì— ê°€ê¹Œì´ ìˆë‹¤ë©´ ìƒˆë¡œìš´ íƒ€ê²Ÿì„ ì°¾ì§€ ì•ŠìŒ
+        if (robot_ptr->get_status() == ROBOT::STATUS::MOVING &&
+            drone_targets.count(rid) &&
+            !drone_paths[rid].empty())
+        {
+            Coord current_target = drone_targets[rid];
+            int dist_to_target = abs(drone_pos.x - current_target.x) + abs(drone_pos.y - current_target.y);
+            if (dist_to_target > 3) // ëª©í‘œê¹Œì§€ ê±°ë¦¬ê°€ 3ë³´ë‹¤ í¬ë©´ ê³„ì† ì´ë™
+            {
+                assigned_targets.insert({current_target.x, current_target.y});
+                continue;
+            }
+        }
+
+        // í•­ìƒ ìƒˆë¡œìš´ íƒ€ì¼ ì¤‘ì‹¬ ì¢Œí‘œ íƒìƒ‰(== 'ê°€ì¥ íš¨ìœ¨ì ì¸ ë¯¸ì§€ ì˜ì—­' ìš°ì„  íƒìƒ‰)
         double best_score = -1e9;
         Coord best_center = drone_pos;
         std::vector<Coord> best_path;
 
-        for (int i = 0; i < tile_rows; ++i) {
-            std::vector<int> js(tile_cols);
-            for (int jj = 0; jj < tile_cols; ++jj) js[jj] = jj;
-            if (i % 2) std::reverse(js.begin(), js.end());
-            for (int jj : js) {
-                int j = (jj + rid) % tile_cols; // °¢ µå·Ğ¿¡ ¿­ ºĞ¹è
-                if (tiles[i][j].unseen_cells == 0) continue;
+        // ëª¨ë“  íƒ€ì¼ì„ ê±°ë¦¬ ìˆœìœ¼ë¡œ ì •ë ¬í•˜ì—¬ íƒìƒ‰
+        std::vector<std::tuple<double, int, int>> tile_candidates;
+
+        for (int i = 0; i < tile_rows; ++i)
+        {
+            for (int j = 0; j < tile_cols; ++j)
+            {
+                if (tiles[i][j].unseen_cells == 0)
+                    continue;
+
                 Coord target = tiles[i][j].center;
-                if (known_object_map[target.x][target.y] == OBJECT::WALL) continue;
-                auto path = plan_path(drone_pos, target, known_cost_map, ROBOT::TYPE::DRONE, known_object_map);
-                if (path.empty()) continue;
-                // Àû±ØÀûÀ¸·Î '¾ÆÁ÷ ¾È ¹àÇôÁø ¼¿ ¸¹Àº Å¸ÀÏ'À» ¿ì¼±!
-                double score = static_cast<double>(tiles[i][j].unseen_cells) / (path.size() + 1);
-                if (score > best_score) {
-                    best_score = score;
-                    best_center = target;
-                    best_path = path;
-                }
+
+                // ì´ë¯¸ ë‹¤ë¥¸ ë“œë¡ ì´ í• ë‹¹ë°›ì€ íƒ€ê²Ÿì¸ì§€ í™•ì¸
+                if (assigned_targets.count({target.x, target.y}))
+                    continue;
+
+                if (known_object_map[target.x][target.y] == OBJECT::WALL)
+                    continue;
+
+                // ë§¨í•˜íƒ„ ê±°ë¦¬ ê³„ì‚°
+                double distance = abs(drone_pos.x - target.x) + abs(drone_pos.y - target.y);
+                double score = static_cast<double>(tiles[i][j].unseen_cells) / (distance + 1);
+
+                tile_candidates.push_back(std::make_tuple(score, i, j));
             }
         }
-        // ¾Æ¹« ¸ñÇ¥µµ ¾øÀ¸¸é ³» ÀÚ¸®¿¡¶óµµ ¸Ó¹«¸£¸ç °üÃø
-        if (best_path.empty() && known_object_map[drone_pos.x][drone_pos.y] == OBJECT::UNKNOWN) {
+
+        // ì ìˆ˜ ìˆœìœ¼ë¡œ ì •ë ¬ (ë†’ì€ ì ìˆ˜ê°€ ë¨¼ì €)
+        std::sort(tile_candidates.begin(), tile_candidates.end(),
+                  [](const auto &a, const auto &b)
+                  {
+                      return std::get<0>(a) > std::get<0>(b);
+                  });
+
+        // ìƒìœ„ í›„ë³´ë“¤ ì¤‘ì—ì„œ ì‹¤ì œ ê²½ë¡œë¥¼ ê³„ì‚°í•˜ì—¬ ìµœì  ì„ íƒ
+        for (const auto &candidate : tile_candidates)
+        {
+            int i = std::get<1>(candidate);
+            int j = std::get<2>(candidate);
+            double candidate_score = std::get<0>(candidate);
+
+            if (candidate_score <= best_score * 0.5) // ì ìˆ˜ê°€ í˜„ì¬ ìµœê³ ì˜ ì ˆë°˜ ì´í•˜ë©´ ì¤‘ë‹¨
+                break;
+
+            Coord target = tiles[i][j].center;
+            auto path = plan_path(drone_pos, target, known_cost_map, ROBOT::TYPE::DRONE, known_object_map);
+            if (path.empty())
+                continue;
+
+            // ì‹¤ì œ ê²½ë¡œ ê¸¸ì´ë¥¼ ê³ ë ¤í•œ ìµœì¢… ì ìˆ˜
+            double final_score = static_cast<double>(tiles[i][j].unseen_cells) / (path.size() + 1);
+            if (final_score > best_score)
+            {
+                best_score = final_score;
+                best_center = target;
+                best_path = path;
+            }
+        }
+
+        // ì•„ë¬´ ì¢Œí‘œë„ ì°¾ì§€ ëª»í•œ ê²½ìš° ìë¦¬ì—ì„œë§Œ ë¨¸ë¬¼ëŸ¬ì„œ ê´€ì¸¡
+        if (best_path.empty() && known_object_map[drone_pos.x][drone_pos.y] == OBJECT::UNKNOWN)
+        {
             best_path.push_back(drone_pos);
             best_center = drone_pos;
             best_score = 1.0;
         }
-        if (!best_path.empty()) {
+
+        if (!best_path.empty())
+        {
             drone_paths[rid] = std::deque<Coord>(best_path.begin(), best_path.end());
             drone_targets[rid] = best_center;
-            printf("[DEBUG] Drone %d: path=%zu, target=(%d,%d)\n", rid, best_path.size(), best_center.x, best_center.y);
+            assigned_targets.insert({best_center.x, best_center.y}); // íƒ€ê²Ÿ í• ë‹¹ ê¸°ë¡
+            printf("[DEBUG] Drone %d: path=%zu, target=(%d,%d), score=%.3f\n",
+                   rid, best_path.size(), best_center.x, best_center.y, best_score);
         }
-        else {
+        else
+        {
             drone_paths[rid].clear();
             drone_targets[rid] = drone_pos;
             printf("[DEBUG] Drone %d: NO path (stay)\n", rid);
@@ -173,33 +288,37 @@ void Scheduler::on_info_updated(const set<Coord>&,
     }
 }
 
-bool Scheduler::on_task_reached(const set<Coord>&,
-    const set<Coord>&,
-    const std::vector<std::vector<std::vector<int>>>&,
-    const std::vector<std::vector<OBJECT>>&,
-    const std::vector<std::shared_ptr<TASK>>&,
-    const std::vector<std::shared_ptr<ROBOT>>&,
-    const ROBOT& robot,
-    const TASK&)
+bool Scheduler::on_task_reached(const set<Coord> &,
+                                const set<Coord> &,
+                                const std::vector<std::vector<std::vector<int>>> &,
+                                const std::vector<std::vector<OBJECT>> &,
+                                const std::vector<std::shared_ptr<TASK>> &,
+                                const std::vector<std::shared_ptr<ROBOT>> &,
+                                const ROBOT &robot,
+                                const TASK &)
 {
-    return false; // µå·ĞÀº ÀÛ¾÷ÇÏÁö ¾ÊÀ½
+    return false; // ì˜ˆì¸¡ ì˜¤ë¥˜ ì²˜ë¦¬
 }
 
-ROBOT::ACTION Scheduler::idle_action(const set<Coord>&,
-    const set<Coord>&,
-    const std::vector<std::vector<std::vector<int>>>&,
-    const std::vector<std::vector<OBJECT>>& known_object_map,
-    const std::vector<std::shared_ptr<TASK>>&,
-    const std::vector<std::shared_ptr<ROBOT>>&,
-    const ROBOT& robot)
+ROBOT::ACTION Scheduler::idle_action(const set<Coord> &,
+                                     const set<Coord> &,
+                                     const std::vector<std::vector<std::vector<int>>> &,
+                                     const std::vector<std::vector<OBJECT>> &known_object_map,
+                                     const std::vector<std::shared_ptr<TASK>> &,
+                                     const std::vector<std::shared_ptr<ROBOT>> &,
+                                     const ROBOT &robot)
 {
-    if (robot.type != ROBOT::TYPE::DRONE) return ROBOT::ACTION::HOLD;
+    if (robot.type != ROBOT::TYPE::DRONE)
+        return ROBOT::ACTION::HOLD;
     int rid = robot.id;
     Coord cur = robot.get_coord();
-    if (drone_paths.count(rid) && !drone_paths[rid].empty()) {
+    if (drone_paths.count(rid) && !drone_paths[rid].empty())
+    {
         Coord next = drone_paths[rid].front();
-        if (coord_equal(cur, next)) drone_paths[rid].pop_front();
-        if (!drone_paths[rid].empty()) {
+        if (coord_equal(cur, next))
+            drone_paths[rid].pop_front();
+        if (!drone_paths[rid].empty())
+        {
             Coord next2 = drone_paths[rid].front();
             if (known_object_map[next2.x][next2.y] == OBJECT::WALL)
                 return ROBOT::ACTION::HOLD;
