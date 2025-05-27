@@ -270,7 +270,7 @@ void Scheduler::on_info_updated(const set<Coord> &,
         {
             Coord current_target = drone_targets[rid];
             int dist_to_target = abs(drone_pos.x - current_target.x) + abs(drone_pos.y - current_target.y);
-            if (dist_to_target > 3) // 목표까지 거리가 3보다 크면 계속 이동
+            if (dist_to_target > 2) // 목표까지 거리가 2보다 크면 계속 이동 (더 적극적)
             {
                 assigned_targets.insert({current_target.x, current_target.y});
                 continue;
@@ -305,6 +305,16 @@ void Scheduler::on_info_updated(const set<Coord> &,
                 double distance = abs(drone_pos.x - target.x) + abs(drone_pos.y - target.y);
                 double score = static_cast<double>(tiles[i][j].unseen_cells) / (distance + 1);
 
+                // 미탐색 영역이 많을수록 더 높은 가중치 부여
+                if (tiles[i][j].unseen_cells > tile_size * tile_size * 0.7)
+                {
+                    score *= 2.0; // 70% 이상 미탐색이면 2배 가중치
+                }
+                else if (tiles[i][j].unseen_cells > tile_size * tile_size * 0.4)
+                {
+                    score *= 1.5; // 40% 이상 미탐색이면 1.5배 가중치
+                }
+
                 tile_candidates.push_back(std::make_tuple(score, i, j));
             }
         }
@@ -323,7 +333,7 @@ void Scheduler::on_info_updated(const set<Coord> &,
             int j = std::get<2>(candidate);
             double candidate_score = std::get<0>(candidate);
 
-            if (candidate_score <= best_score * 0.5) // 점수가 현재 최고의 절반 이하면 중단
+            if (candidate_score <= best_score * 0.3) // 점수가 현재 최고의 30% 이하면 중단 (더 관대)
                 break;
 
             Coord target = tiles[i][j].center;
@@ -415,4 +425,22 @@ bool Scheduler::is_exploration_time() const
 {
     // 0~750틱과 1250틱 이후에만 탐색
     return (current_time <= 750) || (current_time >= 1250);
+}
+
+void Scheduler::set_tile_parameters(int size, int range)
+{
+    tile_size = size;
+    tile_range = range;
+}
+
+void Scheduler::reset_scheduler()
+{
+    map_size = -1;
+    tile_rows = 0;
+    tile_cols = 0;
+    tiles.clear();
+    drone_paths.clear();
+    drone_targets.clear();
+    assigned_targets.clear();
+    current_time = 0;
 }

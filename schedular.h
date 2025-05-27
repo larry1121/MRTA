@@ -38,6 +38,9 @@ public:
     bool is_exploration_time() const;
     std::vector<Coord> plan_path(const Coord &start, const Coord &goal, const std::vector<std::vector<std::vector<int>>> &known_cost_map, ROBOT::TYPE type, const std::vector<std::vector<OBJECT>> &known_object_map);
 
+    void set_tile_parameters(int size, int range);
+    void reset_scheduler();
+
 private:
     struct TileInfo
     {
