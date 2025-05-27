@@ -270,7 +270,7 @@ void Scheduler::on_info_updated(const set<Coord> &,
         {
             Coord current_target = drone_targets[rid];
             int dist_to_target = abs(drone_pos.x - current_target.x) + abs(drone_pos.y - current_target.y);
-            if (dist_to_target > 2) // 목표까지 거리가 2보다 크면 계속 이동 (더 적극적)
+            if (dist_to_target > distance_threshold) // 동적 거리 임계값 사용
             {
                 assigned_targets.insert({current_target.x, current_target.y});
                 continue;
@@ -305,17 +305,42 @@ void Scheduler::on_info_updated(const set<Coord> &,
                 double distance = abs(drone_pos.x - target.x) + abs(drone_pos.y - target.y);
                 double score = static_cast<double>(tiles[i][j].unseen_cells) / (distance + 1);
 
-                // 미탐색 영역이 많을수록 더 높은 가중치 부여
+                // 동적 가중치 사용
                 if (tiles[i][j].unseen_cells > tile_size * tile_size * 0.7)
                 {
-                    score *= 2.0; // 70% 이상 미탐색이면 2배 가중치
+                    score *= high_priority_weight;
                 }
                 else if (tiles[i][j].unseen_cells > tile_size * tile_size * 0.4)
                 {
-                    score *= 1.5; // 40% 이상 미탐색이면 1.5배 가중치
+                    score *= mid_priority_weight;
                 }
 
                 tile_candidates.push_back(std::make_tuple(score, i, j));
+            }
+        }
+
+        // 재탐색 로직: 모든 타일이 탐색 완료되었을 때
+        if (tile_candidates.empty() && current_time >= exploration_resume)
+        {
+            // 이미 탐색된 영역을 다시 탐색하여 새로운 태스크 찾기
+            for (int i = 0; i < tile_rows; ++i)
+            {
+                for (int j = 0; j < tile_cols; ++j)
+                {
+                    Coord target = tiles[i][j].center;
+
+                    if (assigned_targets.count({target.x, target.y}))
+                        continue;
+
+                    if (known_object_map[target.x][target.y] == OBJECT::WALL)
+                        continue;
+
+                    double distance = abs(drone_pos.x - target.x) + abs(drone_pos.y - target.y);
+                    // 재탐색 시에는 낮은 점수라도 포함
+                    double score = 1.0 / (distance + 1);
+
+                    tile_candidates.push_back(std::make_tuple(score, i, j));
+                }
             }
         }
 
@@ -333,7 +358,7 @@ void Scheduler::on_info_updated(const set<Coord> &,
             int j = std::get<2>(candidate);
             double candidate_score = std::get<0>(candidate);
 
-            if (candidate_score <= best_score * 0.3) // 점수가 현재 최고의 30% 이하면 중단 (더 관대)
+            if (candidate_score <= best_score * candidate_threshold) // 동적 후보 선택 기준
                 break;
 
             Coord target = tiles[i][j].center;
@@ -342,7 +367,7 @@ void Scheduler::on_info_updated(const set<Coord> &,
                 continue;
 
             // 실제 경로 길이를 고려한 최종 점수
-            double final_score = static_cast<double>(tiles[i][j].unseen_cells) / (path.size() + 1);
+            double final_score = static_cast<double>(tiles[i][j].unseen_cells + 1) / (path.size() + 1);
             if (final_score > best_score)
             {
                 best_score = final_score;
@@ -423,14 +448,25 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &,
 
 bool Scheduler::is_exploration_time() const
 {
-    // 0~750틱과 1250틱 이후에만 탐색
-    return (current_time <= 750) || (current_time >= 1250);
+    // 동적 시간 구간 사용
+    return (current_time < exploration_pause_start) || (current_time >= exploration_resume);
 }
 
 void Scheduler::set_tile_parameters(int size, int range)
 {
     tile_size = size;
     tile_range = range;
+}
+
+void Scheduler::set_optimization_parameters(int dist_thresh, double high_weight, double mid_weight,
+                                            double cand_thresh, int pause_start, int resume_time)
+{
+    distance_threshold = dist_thresh;
+    high_priority_weight = high_weight;
+    mid_priority_weight = mid_weight;
+    candidate_threshold = cand_thresh;
+    exploration_pause_start = pause_start;
+    exploration_resume = resume_time;
 }
 
 void Scheduler::reset_scheduler()
