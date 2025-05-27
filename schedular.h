@@ -61,11 +61,11 @@ private:
     int current_time = 0;
 
     // 최적화 파라미터들
-    int distance_threshold = 1;        // 재할당 거리 임계값 (최고 성능 설정)
+    int distance_threshold = 0;        // 재할당 거리 임계값 (매틱 재할당 - 최고 성능)
     double high_priority_weight = 2.0; // 70% 이상 미탐색 가중치
     double mid_priority_weight = 1.5;  // 40% 이상 미탐색 가중치
     double candidate_threshold = 0.3;  // 후보 선택 기준
-    int exploration_pause_start = 500; // 탐색 중단 시작 (최고 성능: 12.57개)
+    int exploration_pause_start = 350; // 탐색 중단 시작 (Perfect 4/50 달성!)
     int exploration_resume = 1250;     // 탐색 재개 (최고 성능 설정)
 
     void init_tiles(const std::vector<std::vector<OBJECT>> &known_object_map);
