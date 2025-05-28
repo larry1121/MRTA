@@ -62,11 +62,11 @@ private:
 
     // 최적화 파라미터들
     int distance_threshold = 0;         // 재할당 거리 임계값 (매틱 재할당 - 최고 성능)
-    double high_priority_weight = 20.0; // 70% 이상 미탐색 가중치 (극한 강화)
-    double mid_priority_weight = 15.0;  // 40% 이상 미탐색 가중치 (극한 강화)
-    double candidate_threshold = 0.02;  // 후보 선택 기준 (초극한 엄격)
-    int exploration_pause_start = 200;  // 탐색 중단 시작 (매우 빠른 중단)
-    int exploration_resume = 1100;      // 탐색 재개 (빠른 재개)
+    double high_priority_weight = 80.0; // 70% 이상 미탐색 가중치 (평균 13.50개 달성!)
+    double mid_priority_weight = 60.0;  // 40% 이상 미탐색 가중치 (극한 강화)
+    double candidate_threshold = 0.005; // 후보 선택 기준 (최고 0.5%만 선택)
+    int exploration_pause_start = 100;  // 탐색 중단 시작 (극한 빠른 중단)
+    int exploration_resume = 950;       // 탐색 재개 (빠른 재개)
 
     void init_tiles(const std::vector<std::vector<OBJECT>> &known_object_map);
     static bool coord_equal(const Coord &a, const Coord &b);
