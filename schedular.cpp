@@ -2,7 +2,6 @@
 #include <limits>
 #include <queue>
 #include <algorithm>
-#include <cstdio>
 #include <tuple>
 #include <cmath>
 
@@ -167,7 +166,7 @@ std::vector<Coord> Scheduler::plan_path(const Coord &start, const Coord &goal,
                 continue;
             int ncost = known_cost_map[nx][ny][static_cast<int>(type)];
             if (ncost == -1)
-                ncost = 10000; // 예외 처리 필요!
+                ncost = 10000;
             if (ncost >= std::numeric_limits<int>::max() / 2)
                 continue;
             int alt = cost + ncost;
@@ -208,8 +207,8 @@ ROBOT::ACTION Scheduler::get_direction(const Coord &from, const Coord &to)
     return ROBOT::ACTION::HOLD;
 }
 
-void Scheduler::on_info_updated(const set<Coord> &,
-                                const set<Coord> &,
+void Scheduler::on_info_updated(const std::set<Coord> &,
+                                const std::set<Coord> &,
                                 const std::vector<std::vector<std::vector<int>>> &known_cost_map,
                                 const std::vector<std::vector<OBJECT>> &known_object_map,
                                 const std::vector<std::shared_ptr<TASK>> &,
@@ -231,7 +230,6 @@ void Scheduler::on_info_updated(const set<Coord> &,
                 int rid = robot_ptr->id;
                 drone_paths[rid].clear();
                 drone_targets[rid] = robot_ptr->get_coord();
-                printf("[DEBUG] Drone %d: PAUSED (time=%d)\n", rid, current_time);
             }
         }
         return;
@@ -239,11 +237,6 @@ void Scheduler::on_info_updated(const set<Coord> &,
 
     // 이전 할당 정보 초기화
     assigned_targets.clear();
-
-    int n_drones = 0;
-    for (const auto &r : robots)
-        if (r->type == ROBOT::TYPE::DRONE)
-            ++n_drones;
 
     // 드론들을 ID 순으로 정렬하여 일관된 순서로 타겟 할당
     std::vector<std::shared_ptr<ROBOT>> drone_robots;
@@ -269,10 +262,10 @@ void Scheduler::on_info_updated(const set<Coord> &,
             !drone_paths[rid].empty())
         {
             Coord current_target = drone_targets[rid];
-            int dist_to_target = abs(drone_pos.x - current_target.x) + abs(drone_pos.y - current_target.y);
+            int dist_to_target = std::abs(drone_pos.x - current_target.x) + std::abs(drone_pos.y - current_target.y);
             if (dist_to_target > distance_threshold) // 동적 거리 임계값 사용
             {
-                assigned_targets.insert({current_target.x, current_target.y});
+                assigned_targets.insert(std::make_pair(current_target.x, current_target.y));
                 continue;
             }
         }
@@ -295,14 +288,14 @@ void Scheduler::on_info_updated(const set<Coord> &,
                 Coord target = tiles[i][j].center;
 
                 // 이미 다른 드론이 할당받은 타겟인지 확인
-                if (assigned_targets.count({target.x, target.y}))
+                if (assigned_targets.count(std::make_pair(target.x, target.y)))
                     continue;
 
                 if (known_object_map[target.x][target.y] == OBJECT::WALL)
                     continue;
 
                 // 맨하탄 거리 계산
-                double distance = abs(drone_pos.x - target.x) + abs(drone_pos.y - target.y);
+                double distance = std::abs(drone_pos.x - target.x) + std::abs(drone_pos.y - target.y);
                 double score = static_cast<double>(tiles[i][j].unseen_cells) / (distance + 1);
 
                 // 동적 가중치 사용
@@ -329,13 +322,13 @@ void Scheduler::on_info_updated(const set<Coord> &,
                 {
                     Coord target = tiles[i][j].center;
 
-                    if (assigned_targets.count({target.x, target.y}))
+                    if (assigned_targets.count(std::make_pair(target.x, target.y)))
                         continue;
 
                     if (known_object_map[target.x][target.y] == OBJECT::WALL)
                         continue;
 
-                    double distance = abs(drone_pos.x - target.x) + abs(drone_pos.y - target.y);
+                    double distance = std::abs(drone_pos.x - target.x) + std::abs(drone_pos.y - target.y);
                     // 재탐색 시에는 낮은 점수라도 포함
                     double score = 1.0 / (distance + 1);
 
@@ -346,7 +339,7 @@ void Scheduler::on_info_updated(const set<Coord> &,
 
         // 점수 순으로 정렬 (높은 점수가 먼저)
         std::sort(tile_candidates.begin(), tile_candidates.end(),
-                  [](const auto &a, const auto &b)
+                  [](const std::tuple<double, int, int> &a, const std::tuple<double, int, int> &b)
                   {
                       return std::get<0>(a) > std::get<0>(b);
                   });
@@ -388,21 +381,18 @@ void Scheduler::on_info_updated(const set<Coord> &,
         {
             drone_paths[rid] = std::deque<Coord>(best_path.begin(), best_path.end());
             drone_targets[rid] = best_center;
-            assigned_targets.insert({best_center.x, best_center.y}); // 타겟 할당 기록
-            printf("[DEBUG] Drone %d: path=%zu, target=(%d,%d), score=%.3f (time=%d)\n",
-                   rid, best_path.size(), best_center.x, best_center.y, best_score, current_time);
+            assigned_targets.insert(std::make_pair(best_center.x, best_center.y)); // 타겟 할당 기록
         }
         else
         {
             drone_paths[rid].clear();
             drone_targets[rid] = drone_pos;
-            printf("[DEBUG] Drone %d: NO path (stay) (time=%d)\n", rid, current_time);
         }
     }
 }
 
-bool Scheduler::on_task_reached(const set<Coord> &,
-                                const set<Coord> &,
+bool Scheduler::on_task_reached(const std::set<Coord> &,
+                                const std::set<Coord> &,
                                 const std::vector<std::vector<std::vector<int>>> &,
                                 const std::vector<std::vector<OBJECT>> &,
                                 const std::vector<std::shared_ptr<TASK>> &,
@@ -410,11 +400,12 @@ bool Scheduler::on_task_reached(const set<Coord> &,
                                 const ROBOT &robot,
                                 const TASK &)
 {
-    return false; // 예측 오류 처리
+    // 드론은 작업을 수행하지 않음 (에너지 소모 방지)
+    return robot.type != ROBOT::TYPE::DRONE;
 }
 
-ROBOT::ACTION Scheduler::idle_action(const set<Coord> &,
-                                     const set<Coord> &,
+ROBOT::ACTION Scheduler::idle_action(const std::set<Coord> &,
+                                     const std::set<Coord> &,
                                      const std::vector<std::vector<std::vector<int>>> &,
                                      const std::vector<std::vector<OBJECT>> &known_object_map,
                                      const std::vector<std::shared_ptr<TASK>> &,
