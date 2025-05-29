@@ -147,6 +147,9 @@ private:
                                   const vector<vector<vector<int>>>& known_cost_map,
                                   const vector<vector<OBJECT>>& known_object_map);
 
+    // New helper method to check if a task is already assigned
+    bool isTaskAlreadyAssigned(int taskId) const;
+
     // Task assignment algorithms
     void performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
                                 const vector<shared_ptr<TASK>>& active_tasks,

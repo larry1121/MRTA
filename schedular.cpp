@@ -185,7 +185,6 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                                 const vector<shared_ptr<TASK>> &active_tasks,
                                 const vector<shared_ptr<ROBOT>> &robots)
 {
-    task_total_costs.clear();
     int map_size = known_cost_map.size();
 
     // Initialize robot positions if not set
@@ -200,6 +199,41 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     checkForCompletedTasks(active_tasks);
     checkForExhaustedRobots(robots);
     checkForMapChanges(updated_coords);
+
+    // Remove completed tasks from robot queues
+    for (const auto& task : active_tasks) {
+        if (task->is_done()) {
+            for (auto& robot_queue : robotTaskQueue) {
+                std::queue<int> temp_queue;
+                while (!robot_queue.second.empty()) {
+                    if (robot_queue.second.front() != task->id) {
+                        temp_queue.push(robot_queue.second.front());
+                    }
+                    robot_queue.second.pop();
+                }
+                robot_queue.second = temp_queue;
+            }
+        }
+    }
+
+    // If new tasks are discovered, clear all task queues and costs
+    if (!newly_discovered_tasks.empty()) {
+        // Clear all task queues
+        for (auto& robot_queue : robotTaskQueue) {
+            while (!robot_queue.second.empty()) {
+                robot_queue.second.pop();
+            }
+        }
+        // Clear all costs and paths
+        task_total_costs.clear();
+        path_cache.clear();
+        robot_current_paths.clear();
+        robot_target_task_id.clear();
+        // Reset robot expected positions to their current positions
+        for (const auto& robot : robots) {
+            robotExpectedPosition[robot->id] = robot->get_coord();
+        }
+    }
 
     // Calculate initial costs for all robot-task pairs
     for (const auto& robot_ptr : robots) {
@@ -255,7 +289,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
 
-    // Perform task assignment only if needed
+    // Perform task assignment if needed
     if (shouldTriggerReassignment(updated_coords, active_tasks, robots)) {
         // You can choose one of the following:
         performMinMinAssignment(robots, active_tasks, known_cost_map, known_object_map);
@@ -311,11 +345,9 @@ bool Scheduler::on_task_reached(const set<Coord> &observed_coords,
     if (task_cost == INFINITE) return false;
 
     if (robot.get_energy() >= task_cost) {
-        // Task is completed, remove it from the queue
+        // Remove task from queue when starting work
         if (!robotTaskQueue[robot.id].empty() && robotTaskQueue[robot.id].front() == task.id) {
-            robotTaskQueue[robot.id].pop();
-            
-            // Update robot's expected position to current task location
+            robotTaskQueue[robot.id].pop();  // Remove task from queue when starting work
             updateRobotPosition(robot.id, task.coord);
             
             // If there are more tasks in the queue, prepare for the next one
@@ -648,10 +680,42 @@ int Scheduler::calculateTaskCompletionTime(int robotId, int taskId,
     return currentTime + task_total_costs[robotId][taskId];
 }
 
+bool Scheduler::isTaskAlreadyAssigned(int taskId) const {
+    // Check task queues
+    for (const auto& robot_queue : robotTaskQueue) {
+        std::queue<int> temp_queue = robot_queue.second;
+        while (!temp_queue.empty()) {
+            if (temp_queue.front() == taskId) {
+                return true;
+            }
+            temp_queue.pop();
+        }
+    }
+    
+    // Check currently assigned tasks
+    for (const auto& assignment : robotToTask) {
+        if (assignment.second == taskId) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
 void Scheduler::performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
                                       const vector<shared_ptr<TASK>>& active_tasks,
                                       const vector<vector<vector<int>>>& known_cost_map,
                                       const vector<vector<OBJECT>>& known_object_map) {
+    // Clear existing assignments for reassignment
+    for (auto& robot_queue : robotTaskQueue) {
+        while (!robot_queue.second.empty()) {
+            robot_queue.second.pop();
+        }
+    }
+    robotToTask.clear();
+    robotCurrentTaskEndTime.clear();
+
+    // Create set of unassigned tasks
     std::set<int> unassigned_tasks;
     for (const auto& task : active_tasks) {
         if (!task->is_done()) {
@@ -667,13 +731,23 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
         // Find task-robot pair with minimum completion time
         for (int task_id : unassigned_tasks) {
             for (const auto& robot : robots) {
+                // Skip if robot is drone or exhausted
                 if (robot->type == ROBOT::TYPE::DRONE ||
                     robot->get_status() == ROBOT::STATUS::EXHAUSTED) continue;
+
+                // Skip if robot already has a task
+                if (!robotTaskQueue[robot->id].empty()) continue;
+
+                // Skip if robot has insufficient energy
+                if (robot->get_energy() < robot->ROBOT_ENERGY_PER_TICK) continue;
 
                 int completion_time = calculateTaskCompletionTime(robot->id, task_id,
                                                                active_tasks,
                                                                known_cost_map,
                                                                known_object_map);
+
+                // Skip if completion time is infinite (insufficient energy for task)
+                if (completion_time == std::numeric_limits<int>::max()) continue;
 
                 if (completion_time < min_completion_time) {
                     min_completion_time = completion_time;
@@ -685,8 +759,15 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
 
         if (best_task_id == -1) break; // No valid assignments possible
 
+        // Verify robot still has sufficient energy
+        const auto& robot = robots[best_robot_id];
+        if (robot->get_energy() < robot->ROBOT_ENERGY_PER_TICK) {
+            continue; // Skip this assignment if robot's energy is now too low
+        }
+
         // Assign task to robot
         robotTaskQueue[best_robot_id].push(best_task_id);
+        robotToTask[best_robot_id] = best_task_id;
         robotCurrentTaskEndTime[best_robot_id] = min_completion_time;
 
         // Update robot's expected position
