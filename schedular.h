@@ -8,6 +8,11 @@
 #include <limits> // For std::numeric_limits
 #include <algorithm> // For std::reverse, std::min
 
+// Algorithm selection macros
+#define USE_MINMIN
+//#define USE_SUFFERAGE
+//#define USE_OLB
+
 // Forward declaration
 class ROBOT;
 class TASK;
@@ -165,6 +170,34 @@ private:
                              const vector<shared_ptr<TASK>>& active_tasks,
                              const vector<vector<vector<int>>>& known_cost_map,
                              const vector<vector<OBJECT>>& known_object_map);
+
+    // Path cache structures
+    struct TaskPathInfo {
+        std::vector<ROBOT::ACTION> actions;
+        std::vector<Coord> coordinates;
+        int path_cost;
+        int task_cost;
+        Coord task_coord;
+
+        TaskPathInfo() : path_cost(std::numeric_limits<int>::max()), task_cost(std::numeric_limits<int>::max()) {}
+        TaskPathInfo(const std::vector<ROBOT::ACTION>& acts, 
+                    const std::vector<Coord>& coords,
+                    int pc, int tc, const Coord& tcrd)
+            : actions(acts), coordinates(coords), path_cost(pc), task_cost(tc), task_coord(tcrd) {}
+    };
+
+    // Robot_id -> queue of TaskPathInfo for each task in the robot's queue
+    std::map<int, std::queue<TaskPathInfo>> robot_path_cache;
+
+    // Helper methods for path cache
+    void updatePathCache(int robot_id, 
+                        const std::vector<shared_ptr<TASK>>& active_tasks,
+                        const vector<vector<vector<int>>>& known_cost_map,
+                        const vector<vector<OBJECT>>& known_object_map,
+                        const vector<shared_ptr<ROBOT>>& robots);
+    
+    void clearPathCache(int robot_id);
+    bool isPathCacheValid(int robot_id, const Coord& current_pos) const;
 
 public:
     // Static helper function for move cost

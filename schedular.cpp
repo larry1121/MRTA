@@ -186,6 +186,12 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                                 const vector<shared_ptr<ROBOT>> &robots)
 {
     int map_size = known_cost_map.size();
+    
+    // Check if we should start task assignment (9 active tasks or already started)
+    static bool has_started_assignments = false;
+    if (!has_started_assignments && active_tasks.size() >= 9) {
+        has_started_assignments = true;
+    }
 
     // Initialize robot positions if not set
     for (const auto& robot : robots) {
@@ -199,6 +205,31 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     checkForCompletedTasks(active_tasks);
     checkForExhaustedRobots(robots);
     checkForMapChanges(updated_coords);
+
+    // Check for idle robots with available tasks
+    bool has_idle_robots = false;
+    bool has_available_tasks = false;
+    
+    for (const auto& robot : robots) {
+        if (robot->get_status() == ROBOT::STATUS::IDLE &&
+            robotTaskQueue[robot->id].empty()) {
+            has_idle_robots = true;
+            break;
+        }
+    }
+    
+    for (const auto& task : active_tasks) {
+        if (!task->is_done()) {
+            has_available_tasks = true;
+            break;
+        }
+    }
+    
+    // If we've started assignments and there are idle robots with available tasks,
+    // trigger reassignment
+    if (has_started_assignments && has_idle_robots && has_available_tasks) {
+        needs_reassignment = true;
+    }
 
     // Remove completed tasks from robot queues
     for (const auto& task : active_tasks) {
@@ -235,87 +266,93 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
 
-    // Calculate initial costs for all robot-task pairs
-    for (const auto& robot_ptr : robots) {
-        const ROBOT& robot = *robot_ptr;
-        if (robot.get_status() == ROBOT::STATUS::EXHAUSTED) continue;
+    // Only calculate costs if we've started assignments
+    if (has_started_assignments) {
+        // Calculate initial costs for all robot-task pairs
+        for (const auto& robot_ptr : robots) {
+            const ROBOT& robot = *robot_ptr;
+            if (robot.get_status() == ROBOT::STATUS::EXHAUSTED) continue;
 
-        for (const auto& task_ptr : active_tasks) {
-            const TASK& task = *task_ptr;
-            if (task.is_done()) continue;
+            for (const auto& task_ptr : active_tasks) {
+                const TASK& task = *task_ptr;
+                if (task.is_done()) continue;
 
-            std::vector<ROBOT::ACTION> path_actions;
-            std::vector<Coord> path_coords;
-            int task_execution_cost = task.get_cost(robot.type);
+                std::vector<ROBOT::ACTION> path_actions;
+                std::vector<Coord> path_coords;
+                int task_execution_cost = task.get_cost(robot.type);
 
-            if (task_execution_cost == INFINITE) {
-                task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
-                continue;
-            }
-
-            int path_c = std::numeric_limits<int>::max();
-            bool found_in_cache = false;
-
-            if (path_cache.count(robot.id) && path_cache[robot.id].count(task.coord)) {
-                const PathInfo& cached_path = path_cache[robot.id][task.coord];
-                if (robot.get_energy() >= cached_path.cost + task_execution_cost) {
-                    path_c = cached_path.cost;
-                    path_actions = cached_path.actions;
-                    path_coords = cached_path.coordinates;
-                    found_in_cache = true;
-                } else {
-                    path_cache[robot.id].erase(task.coord);
+                if (task_execution_cost == INFINITE) {
+                    task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
+                    continue;
                 }
-            }
 
-            if (!found_in_cache) {
-                path_c = dijkstra(robotExpectedPosition[robot.id], task.coord, robot, task_execution_cost,
-                                known_cost_map, known_object_map, map_size,
-                                path_actions, path_coords);
-            }
+                int path_c = std::numeric_limits<int>::max();
+                bool found_in_cache = false;
 
-            if (path_c != std::numeric_limits<int>::max()) {
-                if (robot.get_energy() >= path_c + task_execution_cost) {
-                    task_total_costs[robot.id][task.id] = path_c + task_execution_cost;
-                    if (!found_in_cache) {
-                        path_cache[robot.id][task.coord] = PathInfo(path_actions, path_c, path_coords);
+                if (path_cache.count(robot.id) && path_cache[robot.id].count(task.coord)) {
+                    const PathInfo& cached_path = path_cache[robot.id][task.coord];
+                    if (robot.get_energy() >= cached_path.cost + task_execution_cost) {
+                        path_c = cached_path.cost;
+                        path_actions = cached_path.actions;
+                        path_coords = cached_path.coordinates;
+                        found_in_cache = true;
+                    } else {
+                        path_cache[robot.id].erase(task.coord);
+                    }
+                }
+
+                if (!found_in_cache) {
+                    path_c = dijkstra(robotExpectedPosition[robot.id], task.coord, robot, task_execution_cost,
+                                    known_cost_map, known_object_map, map_size,
+                                    path_actions, path_coords);
+                }
+
+                if (path_c != std::numeric_limits<int>::max()) {
+                    if (robot.get_energy() >= path_c + task_execution_cost) {
+                        task_total_costs[robot.id][task.id] = path_c + task_execution_cost;
+                        if (!found_in_cache) {
+                            path_cache[robot.id][task.coord] = PathInfo(path_actions, path_c, path_coords);
+                        }
+                    } else {
+                        task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
                     }
                 } else {
                     task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
                 }
-            } else {
-                task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
             }
         }
-    }
 
-    // Perform task assignment if needed
-    if (shouldTriggerReassignment(updated_coords, active_tasks, robots)) {
-        // You can choose one of the following:
-        performMinMinAssignment(robots, active_tasks, known_cost_map, known_object_map);
-        // performSufferageAssignment(robots, active_tasks, known_cost_map, known_object_map);
-        // performOLBAssignment(robots, active_tasks, known_cost_map, known_object_map);
-        
-        // Reset reassignment flags
-        needs_reassignment = false;
-        newly_discovered_tasks.clear();
-        newly_completed_tasks.clear();
-        newly_exhausted_robots.clear();
-    }
+        // Perform task assignment if needed
+        if (shouldTriggerReassignment(updated_coords, active_tasks, robots)) {
+#ifdef USE_MINMIN
+            performMinMinAssignment(robots, active_tasks, known_cost_map, known_object_map);
+#elif defined(USE_SUFFERAGE)
+            performSufferageAssignment(robots, active_tasks, known_cost_map, known_object_map);
+#elif defined(USE_OLB)
+            performOLBAssignment(robots, active_tasks, known_cost_map, known_object_map);
+#endif
+            
+            // Reset reassignment flags
+            needs_reassignment = false;
+            newly_discovered_tasks.clear();
+            newly_completed_tasks.clear();
+            newly_exhausted_robots.clear();
+        }
 
-    // Update robot paths based on their task queues
-    for (const auto& robot : robots) {
-        if (robot->get_status() == ROBOT::STATUS::EXHAUSTED) continue;
+        // Update robot paths based on their task queues
+        for (const auto& robot : robots) {
+            if (robot->get_status() == ROBOT::STATUS::EXHAUSTED) continue;
 
-        if (!robotTaskQueue[robot->id].empty()) {
-            int next_task_id = robotTaskQueue[robot->id].front();
-            for (const auto& task : active_tasks) {
-                if (task->id == next_task_id) {
-                    if (path_cache.count(robot->id) && path_cache[robot->id].count(task->coord)) {
-                        robot_current_paths[robot->id] = path_cache[robot->id][task->coord];
-                        robot_target_task_id[robot->id] = next_task_id;
+            if (!robotTaskQueue[robot->id].empty()) {
+                int next_task_id = robotTaskQueue[robot->id].front();
+                for (const auto& task : active_tasks) {
+                    if (task->id == next_task_id) {
+                        if (path_cache.count(robot->id) && path_cache[robot->id].count(task->coord)) {
+                            robot_current_paths[robot->id] = path_cache[robot->id][task->coord];
+                            robot_target_task_id[robot->id] = next_task_id;
+                        }
+                        break;
                     }
-                    break;
                 }
             }
         }
@@ -393,77 +430,33 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
     // Update robot's expected position to match actual position
     robotExpectedPosition[robot.id] = robot.get_coord();
 
-    // Continue current path if one exists and is valid
-    if (robot_current_paths.count(robot.id)) {
-        PathInfo& current_path = robot_current_paths.at(robot.id);
+    // Check if we have valid path cache
+    if (isPathCacheValid(robot.id, robot.get_coord())) {
+        TaskPathInfo& current_path = robot_path_cache[robot.id].front();
         if (!current_path.actions.empty() && !current_path.coordinates.empty()) {
-            // Check if robot is at the expected position for the next move
-            if (robot.get_coord() == current_path.coordinates.front()) {
+            ROBOT::ACTION next_action = current_path.actions.front();
+            current_path.actions.erase(current_path.actions.begin());
+            current_path.coordinates.erase(current_path.coordinates.begin());
+            
+            // If this path is complete, move to next task's path
+            if (current_path.actions.empty()) {
+                robot_path_cache[robot.id].pop();
+            }
+            
+            return next_action;
+        }
+    }
+
+    // If no valid path cache, recalculate paths for all tasks in queue
+    if (!robotTaskQueue[robot.id].empty()) {
+        updatePathCache(robot.id, active_tasks, known_cost_map, known_object_map, robots);
+        if (isPathCacheValid(robot.id, robot.get_coord())) {
+            TaskPathInfo& current_path = robot_path_cache[robot.id].front();
+            if (!current_path.actions.empty()) {
                 ROBOT::ACTION next_action = current_path.actions.front();
                 current_path.actions.erase(current_path.actions.begin());
                 current_path.coordinates.erase(current_path.coordinates.begin());
                 return next_action;
-            } else {
-                // Robot deviated from path, recalculate path to current target
-                if (robot_target_task_id.count(robot.id)) {
-                    int target_task_id = robot_target_task_id[robot.id];
-                    for (const auto& task : active_tasks) {
-                        if (task->id == target_task_id) {
-                            std::vector<ROBOT::ACTION> path_actions;
-                            std::vector<Coord> path_coords;
-                            int task_cost = task->get_cost(robot.type);
-                            int path_cost = dijkstra(robot.get_coord(), task->coord, robot, task_cost,
-                                                   known_cost_map, known_object_map,
-                                                   known_cost_map.size(),
-                                                   path_actions, path_coords);
-                            
-                            if (path_cost != std::numeric_limits<int>::max()) {
-                                robot_current_paths[robot.id] = PathInfo(path_actions, path_cost, path_coords);
-                                ROBOT::ACTION next_action = path_actions.front();
-                                robot_current_paths[robot.id].actions.erase(robot_current_paths[robot.id].actions.begin());
-                                robot_current_paths[robot.id].coordinates.erase(robot_current_paths[robot.id].coordinates.begin());
-                                return next_action;
-                            }
-                            break;
-                        }
-                    }
-                }
-                // Clear invalid path
-                robot_current_paths.erase(robot.id);
-                robot_target_task_id.erase(robot.id);
-            }
-        } else {
-            // Path is empty, clear it
-            robot_current_paths.erase(robot.id);
-            robot_target_task_id.erase(robot.id);
-        }
-    }
-
-    // If robot has tasks in queue, get the next task
-    if (!robotTaskQueue[robot.id].empty()) {
-        int next_task_id = robotTaskQueue[robot.id].front();
-        for (const auto& task : active_tasks) {
-            if (task->id == next_task_id) {
-                // Always calculate new path to ensure it's valid
-                std::vector<ROBOT::ACTION> path_actions;
-                std::vector<Coord> path_coords;
-                int task_cost = task->get_cost(robot.type);
-                int path_cost = dijkstra(robot.get_coord(), task->coord, robot, task_cost,
-                                       known_cost_map, known_object_map,
-                                       known_cost_map.size(),
-                                       path_actions, path_coords);
-                
-                if (path_cost != std::numeric_limits<int>::max()) {
-                    // Update path cache and current path
-                    path_cache[robot.id][task->coord] = PathInfo(path_actions, path_cost, path_coords);
-                    robot_current_paths[robot.id] = PathInfo(path_actions, path_cost, path_coords);
-                    robot_target_task_id[robot.id] = next_task_id;
-                    ROBOT::ACTION next_action = path_actions.front();
-                    robot_current_paths[robot.id].actions.erase(robot_current_paths[robot.id].actions.begin());
-                    robot_current_paths[robot.id].coordinates.erase(robot_current_paths[robot.id].coordinates.begin());
-                    return next_action;
-                }
-                break;
             }
         }
     }
@@ -727,30 +720,53 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
         int best_task_id = -1;
         int best_robot_id = -1;
         int min_completion_time = std::numeric_limits<int>::max();
+        int max_remaining_energy = -1;
 
         // Find task-robot pair with minimum completion time
         for (int task_id : unassigned_tasks) {
             for (const auto& robot : robots) {
-                // Skip if robot is drone or exhausted
+                // Skip if robot is drone, exhausted, or already has a task
                 if (robot->type == ROBOT::TYPE::DRONE ||
-                    robot->get_status() == ROBOT::STATUS::EXHAUSTED) continue;
+                    robot->get_status() == ROBOT::STATUS::EXHAUSTED ||
+                    !robotTaskQueue[robot->id].empty()) continue;
 
-                // Skip if robot already has a task
-                if (!robotTaskQueue[robot->id].empty()) continue;
-
-                // Skip if robot has insufficient energy
-                if (robot->get_energy() < robot->ROBOT_ENERGY_PER_TICK) continue;
-
+                // Calculate completion time (includes energy check from task_total_costs)
                 int completion_time = calculateTaskCompletionTime(robot->id, task_id,
                                                                active_tasks,
                                                                known_cost_map,
                                                                known_object_map);
 
-                // Skip if completion time is infinite (insufficient energy for task)
+                // Skip if completion time is infinite (insufficient energy or no valid path)
                 if (completion_time == std::numeric_limits<int>::max()) continue;
 
-                if (completion_time < min_completion_time) {
+                // Also explicitly check if the robot has enough energy for the entire task including travel
+                int task_execution_cost = -1;
+                for(const auto& task_ptr : active_tasks) {
+                    if(task_ptr->id == task_id) {
+                        task_execution_cost = task_ptr->get_cost(robot->type);
+                        break;
+                    }
+                }
+                if (task_execution_cost == INFINITE) continue;
+
+                int path_cost = task_total_costs.count(robot->id) && task_total_costs[robot->id].count(task_id)
+                                ? task_total_costs[robot->id][task_id] - task_execution_cost
+                                : std::numeric_limits<int>::max();
+
+                if (path_cost == std::numeric_limits<int>::max() ||
+                    robot->get_energy() < path_cost + task_execution_cost) {
+                    continue;
+                }
+
+                // If this is a better completion time, or equal completion time but more remaining energy,
+                // or equal completion time and energy but smaller robot ID
+                if (completion_time < min_completion_time ||
+                    (completion_time == min_completion_time &&
+                     (robot->get_energy() > max_remaining_energy ||
+                      (robot->get_energy() == max_remaining_energy &&
+                       robot->id < best_robot_id)))) {
                     min_completion_time = completion_time;
+                    max_remaining_energy = robot->get_energy();
                     best_task_id = task_id;
                     best_robot_id = robot->id;
                 }
@@ -758,12 +774,6 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
         }
 
         if (best_task_id == -1) break; // No valid assignments possible
-
-        // Verify robot still has sufficient energy
-        const auto& robot = robots[best_robot_id];
-        if (robot->get_energy() < robot->ROBOT_ENERGY_PER_TICK) {
-            continue; // Skip this assignment if robot's energy is now too low
-        }
 
         // Assign task to robot
         robotTaskQueue[best_robot_id].push(best_task_id);
@@ -778,10 +788,6 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
             }
         }
 
-        // Recalculate costs for the assigned robot
-        recalculateCostsForRobot(best_robot_id, robots, active_tasks,
-                               known_cost_map, known_object_map);
-
         unassigned_tasks.erase(best_task_id);
     }
 }
@@ -790,6 +796,7 @@ void Scheduler::performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robo
                                          const vector<shared_ptr<TASK>>& active_tasks,
                                          const vector<vector<vector<int>>>& known_cost_map,
                                          const vector<vector<OBJECT>>& known_object_map) {
+    // Create set of unassigned tasks
     std::set<int> unassigned_tasks;
     for (const auto& task : active_tasks) {
         if (!task->is_done()) {
@@ -817,6 +824,28 @@ void Scheduler::performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robo
                                                                known_cost_map,
                                                                known_object_map);
 
+                // Skip if completion time is infinite (insufficient energy or no valid path)
+                if (completion_time == std::numeric_limits<int>::max()) continue;
+
+                // Also explicitly check if the robot has enough energy for the entire task including travel
+                int task_execution_cost = -1;
+                for(const auto& task_ptr : active_tasks) {
+                    if(task_ptr->id == task_id) {
+                        task_execution_cost = task_ptr->get_cost(robot->type);
+                        break;
+                    }
+                }
+                if (task_execution_cost == INFINITE) continue;
+
+                int path_cost = task_total_costs.count(robot->id) && task_total_costs[robot->id].count(task_id)
+                                ? task_total_costs[robot->id][task_id] - task_execution_cost
+                                : std::numeric_limits<int>::max();
+
+                if (path_cost == std::numeric_limits<int>::max() ||
+                    robot->get_energy() < path_cost + task_execution_cost) {
+                    continue;
+                }
+
                 if (completion_time < min_time) {
                     second_min_time = min_time;
                     min_time = completion_time;
@@ -826,11 +855,15 @@ void Scheduler::performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robo
                 }
             }
 
-            int sufferage = second_min_time - min_time;
-            if (sufferage > max_sufferage) {
-                max_sufferage = sufferage;
-                best_task_id = task_id;
-                best_robot_id = min_robot_id;
+            // Only calculate sufferage if we found both min and second min times
+            if (min_time != std::numeric_limits<int>::max() &&
+                second_min_time != std::numeric_limits<int>::max()) {
+                int sufferage = second_min_time - min_time;
+                if (sufferage > max_sufferage) {
+                    max_sufferage = sufferage;
+                    best_task_id = task_id;
+                    best_robot_id = min_robot_id;
+                }
             }
         }
 
@@ -838,6 +871,7 @@ void Scheduler::performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robo
 
         // Assign task to robot
         robotTaskQueue[best_robot_id].push(best_task_id);
+        robotToTask[best_robot_id] = best_task_id;
         robotCurrentTaskEndTime[best_robot_id] = calculateTaskCompletionTime(best_robot_id, best_task_id,
                                                                            active_tasks,
                                                                            known_cost_map,
@@ -851,9 +885,17 @@ void Scheduler::performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robo
             }
         }
 
-        // Recalculate costs for the assigned robot
-        recalculateCostsForRobot(best_robot_id, robots, active_tasks,
-                               known_cost_map, known_object_map);
+        // Update path cache for the assigned robot
+        updatePathCache(best_robot_id, active_tasks, known_cost_map, known_object_map, robots);
+
+        // Recalculate costs for all robots after assignment
+        for (const auto& robot : robots) {
+            if (robot->type != ROBOT::TYPE::DRONE &&
+                robot->get_status() != ROBOT::STATUS::EXHAUSTED) {
+                recalculateCostsForRobot(robot->id, robots, active_tasks,
+                                       known_cost_map, known_object_map);
+            }
+        }
 
         unassigned_tasks.erase(best_task_id);
     }
@@ -928,4 +970,71 @@ void Scheduler::performOLBAssignment(const vector<shared_ptr<ROBOT>>& robots,
 
         unassigned_tasks.erase(best_task_id);
     }
+}
+
+void Scheduler::updatePathCache(int robot_id,
+                              const std::vector<shared_ptr<TASK>>& active_tasks,
+                              const vector<vector<vector<int>>>& known_cost_map,
+                              const vector<vector<OBJECT>>& known_object_map,
+                              const vector<shared_ptr<ROBOT>>& robots) {
+    // Clear existing path cache for this robot
+    clearPathCache(robot_id);
+
+    // Get robot's current position
+    Coord current_pos = robotExpectedPosition[robot_id];
+    
+    // For each task in the robot's queue, calculate and cache the path
+    std::queue<int> temp_queue = robotTaskQueue[robot_id];
+    while (!temp_queue.empty()) {
+        int task_id = temp_queue.front();
+        temp_queue.pop();
+
+        // Find the task
+        const TASK* task = nullptr;
+        for (const auto& t : active_tasks) {
+            if (t->id == task_id) {
+                task = t.get();
+                break;
+            }
+        }
+        if (!task) continue;
+
+        // Calculate path to this task
+        std::vector<ROBOT::ACTION> path_actions;
+        std::vector<Coord> path_coords;
+        int task_cost = task->get_cost(robots[robot_id]->type);
+        
+        int path_cost = dijkstra(current_pos, task->coord, *robots[robot_id], task_cost,
+                               known_cost_map, known_object_map,
+                               known_cost_map.size(),
+                               path_actions, path_coords);
+
+        if (path_cost != std::numeric_limits<int>::max()) {
+            // Cache the path
+            robot_path_cache[robot_id].push(TaskPathInfo(path_actions, path_coords,
+                                                       path_cost, task_cost, task->coord));
+            // Update current position for next path calculation
+            current_pos = task->coord;
+        }
+    }
+}
+
+void Scheduler::clearPathCache(int robot_id) {
+    while (!robot_path_cache[robot_id].empty()) {
+        robot_path_cache[robot_id].pop();
+    }
+}
+
+bool Scheduler::isPathCacheValid(int robot_id, const Coord& current_pos) const {
+    if (!robot_path_cache.count(robot_id) || robot_path_cache.at(robot_id).empty()) {
+        return false;
+    }
+    
+    // Check if the first path in cache starts from current position
+    const TaskPathInfo& first_path = robot_path_cache.at(robot_id).front();
+    if (first_path.coordinates.empty()) {
+        return false;
+    }
+    
+    return first_path.coordinates.front() == current_pos;
 }
