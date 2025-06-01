@@ -458,9 +458,7 @@ bool Scheduler::on_task_reached(const set<Coord> &observed_coords,
                 }
             }
         }
-        if(task.get_assigned_robot_id() == -1){
-            return true;
-        }
+        return true;
     }
     return false;
 }
@@ -480,77 +478,33 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
     // Update robot's expected position to match actual position
     robotExpectedPosition[robot.id] = robot.get_coord();
 
-    // Continue current path if one exists and is valid
-    if (robot_current_paths.count(robot.id)) {
-        PathInfo& current_path = robot_current_paths.at(robot.id);
+    // Check if we have valid path cache
+    if (isPathCacheValid(robot.id, robot.get_coord())) {
+        TaskPathInfo& current_path = robot_path_cache[robot.id].front();
         if (!current_path.actions.empty() && !current_path.coordinates.empty()) {
-            // Check if robot is at the expected position for the next move
-            if (robot.get_coord() == current_path.coordinates.front()) {
+            ROBOT::ACTION next_action = current_path.actions.front();
+            current_path.actions.erase(current_path.actions.begin());
+            current_path.coordinates.erase(current_path.coordinates.begin());
+            
+            // If this path is complete, move to next task's path
+            if (current_path.actions.empty()) {
+                robot_path_cache[robot.id].pop();
+            }
+            
+            return next_action;
+        }
+    }
+
+    // If no valid path cache, recalculate paths for all tasks in queue
+    if (!robotTaskQueue[robot.id].empty()) {
+        updatePathCache(robot.id, active_tasks, known_cost_map, known_object_map, robots);
+        if (isPathCacheValid(robot.id, robot.get_coord())) {
+            TaskPathInfo& current_path = robot_path_cache[robot.id].front();
+            if (!current_path.actions.empty()) {
                 ROBOT::ACTION next_action = current_path.actions.front();
                 current_path.actions.erase(current_path.actions.begin());
                 current_path.coordinates.erase(current_path.coordinates.begin());
                 return next_action;
-            } else {
-                // Robot deviated from path, recalculate path to current target
-                if (robot_target_task_id.count(robot.id)) {
-                    int target_task_id = robot_target_task_id[robot.id];
-                    for (const auto& task : active_tasks) {
-                        if (task->id == target_task_id) {
-                            std::vector<ROBOT::ACTION> path_actions;
-                            std::vector<Coord> path_coords;
-                            int task_cost = task->get_cost(robot.type);
-                            int path_cost = dijkstra(robot.get_coord(), task->coord, robot, task_cost,
-                                                   known_cost_map, known_object_map,
-                                                   known_cost_map.size(),
-                                                   path_actions, path_coords);
-                            
-                            if (path_cost != std::numeric_limits<int>::max()) {
-                                robot_current_paths[robot.id] = PathInfo(path_actions, path_cost, path_coords);
-                                ROBOT::ACTION next_action = path_actions.front();
-                                robot_current_paths[robot.id].actions.erase(robot_current_paths[robot.id].actions.begin());
-                                robot_current_paths[robot.id].coordinates.erase(robot_current_paths[robot.id].coordinates.begin());
-                                return next_action;
-                            }
-                            break;
-                        }
-                    }
-                }
-                // Clear invalid path
-                robot_current_paths.erase(robot.id);
-                robot_target_task_id.erase(robot.id);
-            }
-        } else {
-            // Path is empty, clear it
-            robot_current_paths.erase(robot.id);
-            robot_target_task_id.erase(robot.id);
-        }
-    }
-
-    // If robot has tasks in queue, get the next task
-    if (!robotTaskQueue[robot.id].empty()) {
-        int next_task_id = robotTaskQueue[robot.id].front();
-        for (const auto& task : active_tasks) {
-            if (task->id == next_task_id) {
-                // Always calculate new path to ensure it's valid
-                std::vector<ROBOT::ACTION> path_actions;
-                std::vector<Coord> path_coords;
-                int task_cost = task->get_cost(robot.type);
-                int path_cost = dijkstra(robot.get_coord(), task->coord, robot, task_cost,
-                                       known_cost_map, known_object_map,
-                                       known_cost_map.size(),
-                                       path_actions, path_coords);
-                
-                if (path_cost != std::numeric_limits<int>::max()) {
-                    // Update path cache and current path
-                    path_cache[robot.id][task->coord] = PathInfo(path_actions, path_cost, path_coords);
-                    robot_current_paths[robot.id] = PathInfo(path_actions, path_cost, path_coords);
-                    robot_target_task_id[robot.id] = next_task_id;
-                    ROBOT::ACTION next_action = path_actions.front();
-                    robot_current_paths[robot.id].actions.erase(robot_current_paths[robot.id].actions.begin());
-                    robot_current_paths[robot.id].coordinates.erase(robot_current_paths[robot.id].coordinates.begin());
-                    return next_action;
-                }
-                break;
             }
         }
     }
@@ -979,6 +933,9 @@ void Scheduler::performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robo
             }
         }
 
+        // Update path cache for the assigned robot
+        updatePathCache(best_robot_id, active_tasks, known_cost_map, known_object_map, robots);
+
         // Recalculate costs for all robots after assignment
         for (const auto& robot : robots) {
             if (robot->type != ROBOT::TYPE::DRONE &&
@@ -1061,4 +1018,71 @@ void Scheduler::performOLBAssignment(const vector<shared_ptr<ROBOT>>& robots,
 
         unassigned_tasks.erase(best_task_id);
     }
+}
+
+void Scheduler::updatePathCache(int robot_id,
+                              const std::vector<shared_ptr<TASK>>& active_tasks,
+                              const vector<vector<vector<int>>>& known_cost_map,
+                              const vector<vector<OBJECT>>& known_object_map,
+                              const vector<shared_ptr<ROBOT>>& robots) {
+    // Clear existing path cache for this robot
+    clearPathCache(robot_id);
+
+    // Get robot's current position
+    Coord current_pos = robotExpectedPosition[robot_id];
+    
+    // For each task in the robot's queue, calculate and cache the path
+    std::queue<int> temp_queue = robotTaskQueue[robot_id];
+    while (!temp_queue.empty()) {
+        int task_id = temp_queue.front();
+        temp_queue.pop();
+
+        // Find the task
+        const TASK* task = nullptr;
+        for (const auto& t : active_tasks) {
+            if (t->id == task_id) {
+                task = t.get();
+                break;
+            }
+        }
+        if (!task) continue;
+
+        // Calculate path to this task
+        std::vector<ROBOT::ACTION> path_actions;
+        std::vector<Coord> path_coords;
+        int task_cost = task->get_cost(robots[robot_id]->type);
+        
+        int path_cost = dijkstra(current_pos, task->coord, *robots[robot_id], task_cost,
+                               known_cost_map, known_object_map,
+                               known_cost_map.size(),
+                               path_actions, path_coords);
+
+        if (path_cost != std::numeric_limits<int>::max()) {
+            // Cache the path
+            robot_path_cache[robot_id].push(TaskPathInfo(path_actions, path_coords,
+                                                       path_cost, task_cost, task->coord));
+            // Update current position for next path calculation
+            current_pos = task->coord;
+        }
+    }
+}
+
+void Scheduler::clearPathCache(int robot_id) {
+    while (!robot_path_cache[robot_id].empty()) {
+        robot_path_cache[robot_id].pop();
+    }
+}
+
+bool Scheduler::isPathCacheValid(int robot_id, const Coord& current_pos) const {
+    if (!robot_path_cache.count(robot_id) || robot_path_cache.at(robot_id).empty()) {
+        return false;
+    }
+    
+    // Check if the first path in cache starts from current position
+    const TaskPathInfo& first_path = robot_path_cache.at(robot_id).front();
+    if (first_path.coordinates.empty()) {
+        return false;
+    }
+    
+    return first_path.coordinates.front() == current_pos;
 }
