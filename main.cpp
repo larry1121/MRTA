@@ -52,6 +52,10 @@ int main()
                                   active_tasks,
                                   robots);
         timer.stop();
+
+        // Print robot task queues for debugging
+        scheduler.print_robot_task_queues(robots, active_tasks);
+
         for (auto robot : robots)
         {
             auto &status = robot->get_status();
