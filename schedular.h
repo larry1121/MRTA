@@ -10,7 +10,7 @@
 
 // Algorithm selection macros
 #define USE_MINMIN
-//#define USE_SUFFERAGE
+// #define USE_SUFFERAGE
 //#define USE_OLB
 
 // Forward declaration
@@ -26,6 +26,18 @@ struct PathInfo {
 
     PathInfo() : cost(std::numeric_limits<int>::max()) {}
     PathInfo(std::vector<ROBOT::ACTION> acts, int c, std::vector<Coord> coords) : actions(std::move(acts)), cost(c), coordinates(std::move(coords)) {}
+};
+
+// Add after the PathInfo struct
+struct TaskCluster {
+    vector<int> task_ids;  // 클러스터에 포함된 태스크 ID들
+    int total_cost;        // 클러스터의 총 비용
+    int start_task_id;     // 시작 태스크 ID
+    int end_task_id;       // 끝 태스크 ID
+    Coord start_pos;       // 시작 위치
+    Coord end_pos;         // 끝 위치
+
+    TaskCluster() : total_cost(0), start_task_id(-1), end_task_id(-1) {}
 };
 
 class Scheduler
@@ -56,6 +68,11 @@ public:
                               const ROBOT &robot);
 
 private:
+    // Constants for clustering and energy management
+    const int CLUSTER_DISTANCE_THRESHOLD = 1750;  // 클러스터링 거리 임계값
+    const int ENERGY_MARGIN_PERCENT = 10;         // 에너지 여유 비율 (%)
+    const int MAX_CLUSTER_SIZE = 4;              // 최대 클러스터 크기 (태스크 개수)
+
     // Robot_id -> goal_coord -> PathInfo
     std::map<int, std::map<Coord, PathInfo>> path_cache;
 
@@ -149,7 +166,8 @@ private:
     int calculateTaskCompletionTime(int robotId, int taskId,
                                   const vector<shared_ptr<TASK>>& active_tasks,
                                   const vector<vector<vector<int>>>& known_cost_map,
-                                  const vector<vector<OBJECT>>& known_object_map);
+                                  const vector<vector<OBJECT>>& known_object_map,
+                                  const vector<shared_ptr<ROBOT>>& robots);
 
     bool isTaskAlreadyAssigned(int taskId) const;
 
@@ -194,6 +212,26 @@ private:
     
     void clearPathCache(int robot_id);
     bool isPathCacheValid(int robot_id, const Coord& current_pos) const;
+
+    // Add new private members
+    vector<TaskCluster> task_clusters;
+
+    // Add new private methods
+    void clusterTasks(const vector<shared_ptr<TASK>>& active_tasks,
+                     const vector<shared_ptr<ROBOT>>& robots,
+                     const vector<vector<vector<int>>>& known_cost_map,
+                     const vector<vector<OBJECT>>& known_object_map);
+    
+    void findClusterEndpoints(TaskCluster& cluster,
+                            const vector<shared_ptr<TASK>>& active_tasks,
+                            const vector<shared_ptr<ROBOT>>& robots,
+                            const vector<vector<vector<int>>>& known_cost_map,
+                            const vector<vector<OBJECT>>& known_object_map);
+    
+    int calculatePathCost(const Coord& start, const Coord& end,
+                         const ROBOT& robot,
+                         const vector<vector<vector<int>>>& known_cost_map,
+                         const vector<vector<OBJECT>>& known_object_map);
 
 public:
     // Static helper function for move cost
