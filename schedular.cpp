@@ -12,6 +12,8 @@
 // Comparison for Coord to be used in std::map or std::set if needed.
 // Coord already has operator< defined in simulator.h
 
+set<Coord> now_coords;
+
 int Scheduler::dijkstra(const Coord& start,
                         const Coord& goal,
                         const ROBOT& robot,
@@ -194,7 +196,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
         }
     }
     if(NO_IDLE == true) {return;}
-    
+    needs_reassignment=false;
     // Check if we should start task assignment (9 active tasks or already started) 수정필
     static bool has_started_assignments = false;
     if (!has_started_assignments && active_tasks.size() >= 9) {
@@ -219,7 +221,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     
     for (const auto& robot : robots) {
         if (robot->get_status() == ROBOT::STATUS::IDLE &&
-            robotTaskQueue[robot->id].empty()) {
+            robotTaskQueue[robot->id].empty()&&robot->type != ROBOT::TYPE::DRONE) {
             has_idle_robots = true;
             break;
         }
@@ -228,13 +230,13 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     for (const auto& task : active_tasks) {
         if (!task->is_done()) {
             has_available_tasks = true;
-            if (!newly_discovered_tasks.empty() || !updated_coords.empty()) {
+            if (!newly_discovered_tasks.empty() || now_coords == updated_coords) {
                 has_new_tasks = true;
             }
                 break;
             }
         }
-    
+    now_coords = updated_coords;
     // Only trigger reassignment if there are new tasks or map changes
     if (has_started_assignments && has_idle_robots && has_available_tasks &&
         (has_new_tasks || !updated_coords.empty())) {
@@ -269,16 +271,16 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             // Print cluster information
             for (size_t i = 0; i < task_clusters.size(); i++) {
                 const auto& cluster = task_clusters[i];
-                std::cout << "\nCluster " << i << ":" << std::endl;
-                std::cout << "  Tasks: ";
+                //std::cout << "\nCluster " << i << ":" << std::endl;
+                //std::cout << "  Tasks: ";
                 for (int task_id : cluster.task_ids) {
-                    std::cout << task_id << " ";
+                //    std::cout << task_id << " ";
                 }
-                std::cout << "\n  Start Task: " << cluster.start_task_id
-                         << " at " << cluster.start_pos << std::endl;
-                std::cout << "  End Task: " << cluster.end_task_id
-                         << " at " << cluster.end_pos << std::endl;
-                std::cout << "  Total Cost: " << cluster.total_cost << std::endl;
+                //std::cout << "\n  Start Task: " << cluster.start_task_id
+                //         << " at " << cluster.start_pos << std::endl;
+                //std::cout << "  End Task: " << cluster.end_task_id
+                //         << " at " << cluster.end_pos << std::endl;
+                //std::cout << "  Total Cost: " << cluster.total_cost << std::endl;
             }
         }
 
@@ -291,7 +293,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
             // Skip cost calculation if robot has a valid path and no map changes
             if (has_new_tasks || needs_reassignment) {
                 
-                std::cout << "\nRobot " << robot.id << " (" << robot.type << ") at " << robotExpectedPosition[robot.id] << std::endl;
+                //std::cout << "\nRobot " << robot.id << " (" << robot.type << ") at " << robotExpectedPosition[robot.id] << std::endl;
                 for (const auto& task_ptr : active_tasks) {
                     const TASK& task = *task_ptr;
                     if (task.is_done()) continue;
@@ -302,7 +304,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                     if (task_execution_cost == INFINITE) {
                         task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
                         // 이 경우 로그 출력 건너뛰기
-                        std::cout << "  Task " << task.id << " at " << task.coord << ": UNREACHABLE (task cost)" << std::endl;
+                        //std::cout << "  Task " << task.id << " at " << task.coord << ": UNREACHABLE (task cost)" << std::endl;
                         continue;
                     }
 
@@ -321,9 +323,9 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                             path_coords = cached_path.coordinates;
                             found_in_cache = true;
                             // 유효한 캐시 사용 로그 출력
-                            std::cout << "  Task " << task.id << " at " << task.coord << ": "
-                                     << path_c << " (cached) + " << task_execution_cost
-                                     << " = " << (path_c + task_execution_cost) << std::endl;
+                            //std::cout << "  Task " << task.id << " at " << task.coord << ": "
+                                     //<< path_c << " (cached) + " << task_execution_cost
+                                     //<< " = " << (path_c + task_execution_cost) << std::endl;
                         } else {
                             // 에너지가 부족하여 캐시 사용 불가
                              path_cache[robot.id].erase(task.coord); // Invalidate cache
@@ -347,16 +349,16 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
 
                         // 새로운 경로 계산 로그 (INF가 아닌 경우만 출력)
                         if (path_c <= 100000000) {
-                             std::cout << "  Task " << task.id << " at " << task.coord << ": "
-                                       << path_c << " (new) + " << task_execution_cost
-                                       << " = " << (path_c + task_execution_cost) << std::endl;
+                             //std::cout << "  Task " << task.id << " at " << task.coord << ": "
+                                       //<< path_c << " (new) + " << task_execution_cost
+                                       //<< " = " << (path_c + task_execution_cost) << std::endl;
                         }
                     }
 
                     // 최종 총 비용 계산 및 저장
                     if (path_c == std::numeric_limits<int>::max()) {
                         task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
-                        std::cout << "  Task " << task.id << " at " << task.coord << ": UNREACHABLE (no path or too costly)" << std::endl;
+                        //std::cout << "  Task " << task.id << " at " << task.coord << ": UNREACHABLE (no path or too costly)" << std::endl;
                     } else if (robot.get_energy() >= path_c + task_execution_cost) {
                          // 로봇 에너지가 충분한 경우
                         task_total_costs[robot.id][task.id] = path_c + task_execution_cost;
@@ -368,7 +370,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                          // 로봇 에너지가 부족한 경우
                         task_total_costs[robot.id][task.id] = std::numeric_limits<int>::max();
                          // 에너지 부족으로 인한 할당 불가 로그 출력 건너뛰기
-                        std::cout << "  Task " << task.id << " at " << task.coord << ": UNREACHABLE (insufficient energy)" << std::endl;
+                        //std::cout << "  Task " << task.id << " at " << task.coord << ": UNREACHABLE (insufficient energy)" << std::endl;
                     }
                 }
             }
@@ -376,7 +378,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
 
         // Perform task assignment if needed
         if (shouldTriggerReassignment(updated_coords, active_tasks, robots)) {
-            std::cout << "\n=== Task Assignment ===" << std::endl;
+            //std::cout << "\n=== Task Assignment ===" << std::endl;
 #ifdef USE_MINMIN
             performMinMinAssignment(active_tasks, robots, known_cost_map, known_object_map);
 #elif defined(USE_SUFFERAGE)
@@ -901,13 +903,15 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<TASK>>& active_t
                 total_cost = path_cost + modified_cluster.total_cost;
 
                 // Skip if insufficient energy
-                int required_energy = total_cost;
+                int required_energy = total_cost*1.05;
+                if(cluster.task_ids.size()>=3) required_energy = total_cost*1.1;
                 if (robot->get_energy() < required_energy) {
                     continue;
                 }
 
                 // Calculate completion time
-                int completion_time = calculateTaskCompletionTime(robot->id, modified_cluster.start_task_id,
+                int completion_time = calculateTaskCompletionTime(robot->id, 
+                                                                  modified_cluster.start_task_id,
                                                                active_tasks,
                                                                known_cost_map,
                                                                known_object_map,
@@ -922,6 +926,7 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<TASK>>& active_t
                          << ", total = " << total_cost
                          << ", completion time = " << completion_time << std::endl;
 
+                
                 // If this is a better completion time
                 if (completion_time < min_completion_time) {
                     min_completion_time = completion_time;
