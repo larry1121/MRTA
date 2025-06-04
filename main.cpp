@@ -155,9 +155,25 @@ int main()
 
         constexpr int TIME_MAX = MAP_SIZE * 100;
 
+<<<<<<< HEAD
         while (++time < TIME_MAX &&
             robots.size() != map.get_exhausted_robot_num() &&
             map.num_total_task != map.get_completed_task_num())
+=======
+        timer.start();
+        scheduler.on_info_updated(observed_coords,
+                                  updated_coords,
+                                  known_cost_map,
+                                  known_object_map,
+                                  active_tasks,
+                                  robots);
+        timer.stop();
+
+        // Print robot task queues for debugging
+        scheduler.print_robot_task_queues(robots, active_tasks);
+
+        for (auto robot : robots)
+>>>>>>> 98c7f7e6a9698882011420de8d8471834166f5bd
         {
             taskdispatcher.try_dispatch(time);
             observed_coords = map.observed_coord_by_robot();
@@ -227,6 +243,7 @@ int main()
                   << "\n";
     }
 
+<<<<<<< HEAD
     // === [모든 회차 끝난 뒤 통계] ===
     // 평균
     double mean_active = std::accumulate(active_tasks_at_end.begin(), active_tasks_at_end.end(), 0.0) / NUM_RUNS;
@@ -243,4 +260,15 @@ int main()
     std::cout << "Completed tasks:     mean=" << mean_completed << " median=" << median_completed << std::endl;
 
     return 0;
+=======
+    cout << endl;
+    map.print_robot_summary();
+    map.print_task_summary();
+    size_t unit;
+    string units[] = {"ns", "us", "ms", "s"};
+    double count = static_cast<double>(timer.time_elapsed.count());
+    for (unit = 0; unit < 4 && count >= 1e3; ++unit)
+        count /= 1e3;
+    cout << "Algorithm time : " << count << units[unit] << endl;
+>>>>>>> 98c7f7e6a9698882011420de8d8471834166f5bd
 }

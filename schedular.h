@@ -1,4 +1,4 @@
-#ifndef SCHEDULER_H_
+﻿#ifndef SCHEDULER_H_
 #define SCHEDULER_H_
 
 #include "simulator.h"
@@ -10,7 +10,7 @@
 
 // Algorithm selection macros
 #define USE_MINMIN
-//#define USE_SUFFERAGE
+// #define USE_SUFFERAGE
 //#define USE_OLB
 
 // Forward declaration
@@ -26,6 +26,18 @@ struct PathInfo {
 
     PathInfo() : cost(std::numeric_limits<int>::max()) {}
     PathInfo(std::vector<ROBOT::ACTION> acts, int c, std::vector<Coord> coords) : actions(std::move(acts)), cost(c), coordinates(std::move(coords)) {}
+};
+
+// Add after the PathInfo struct
+struct TaskCluster {
+    vector<int> task_ids;  // 클러스터에 포함된 태스크 ID들
+    int total_cost;        // 클러스터의 총 비용
+    int start_task_id;     // 시작 태스크 ID
+    int end_task_id;       // 끝 태스크 ID
+    Coord start_pos;       // 시작 위치
+    Coord end_pos;         // 끝 위치
+
+    TaskCluster() : total_cost(0), start_task_id(-1), end_task_id(-1) {}
 };
 
 class Scheduler
@@ -56,6 +68,11 @@ public:
                               const ROBOT &robot);
 
 private:
+    // Constants for clustering and energy management
+    const int CLUSTER_DISTANCE_THRESHOLD = 1400;  // 클러스터링 거리 임계값
+    const int ENERGY_MARGIN_PERCENT = 10;         // 에너지 여유 비율 (%)
+    const int MAX_CLUSTER_SIZE = 4;              // 최대 클러스터 크기 (태스크 개수)
+
     // Robot_id -> goal_coord -> PathInfo
     std::map<int, std::map<Coord, PathInfo>> path_cache;
 
@@ -102,22 +119,21 @@ private:
     }
 
     // Dijkstra pathfinding algorithm
-    // Returns path cost, fills out_path_actions and out_path_coords.
-    // Returns std::numeric_limits<int>::max() if no path or not enough energy.
     int dijkstra(const Coord& start,
                  const Coord& goal,
                  const ROBOT& robot,
-                 const int task_cost_for_robot, // task.get_cost(robot.type)
+                 const int task_cost_for_robot,
                  const vector<vector<vector<int>>>& known_cost_map,
                  const vector<vector<OBJECT>>& known_object_map,
                  int map_size,
                  std::vector<ROBOT::ACTION>& out_path_actions,
                  std::vector<Coord>& out_path_coords);
 
-    // Task assignment logic (adapted from teammate)
-    void perform_task_assignment(const vector<shared_ptr<ROBOT>>& robots,
-                                 const vector<shared_ptr<TASK>>& active_tasks,
-                                 const vector<vector<OBJECT>>& known_object_map);
+    // Task assignment logic
+    void performMinMinAssignment(const vector<shared_ptr<TASK>>& active_tasks,
+                               const vector<shared_ptr<ROBOT>>& robots,
+                               const vector<vector<vector<int>>>& known_cost_map,
+                               const vector<vector<OBJECT>>& known_object_map);
     
     // Helper to check if map is fully revealed
     bool is_map_fully_revealed(const vector<vector<OBJECT>>& known_object_map) const;
@@ -150,26 +166,24 @@ private:
     int calculateTaskCompletionTime(int robotId, int taskId,
                                   const vector<shared_ptr<TASK>>& active_tasks,
                                   const vector<vector<vector<int>>>& known_cost_map,
-                                  const vector<vector<OBJECT>>& known_object_map);
+                                  const vector<vector<OBJECT>>& known_object_map,
+                                  const vector<shared_ptr<ROBOT>>& robots);
 
-    // New helper method to check if a task is already assigned
     bool isTaskAlreadyAssigned(int taskId) const;
 
-    // Task assignment algorithms
-    void performMinMinAssignment(const vector<shared_ptr<ROBOT>>& robots,
-                                const vector<shared_ptr<TASK>>& active_tasks,
-                                const vector<vector<vector<int>>>& known_cost_map,
-                                const vector<vector<OBJECT>>& known_object_map);
+    void perform_task_assignment(const vector<shared_ptr<ROBOT>>& robots,
+                               const vector<shared_ptr<TASK>>& active_tasks,
+                               const vector<vector<OBJECT>>& known_object_map);
     
     void performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robots,
-                                   const vector<shared_ptr<TASK>>& active_tasks,
-                                   const vector<vector<vector<int>>>& known_cost_map,
-                                   const vector<vector<OBJECT>>& known_object_map);
+                                  const vector<shared_ptr<TASK>>& active_tasks,
+                                  const vector<vector<vector<int>>>& known_cost_map,
+                                  const vector<vector<OBJECT>>& known_object_map);
     
     void performOLBAssignment(const vector<shared_ptr<ROBOT>>& robots,
-                             const vector<shared_ptr<TASK>>& active_tasks,
-                             const vector<vector<vector<int>>>& known_cost_map,
-                             const vector<vector<OBJECT>>& known_object_map);
+                            const vector<shared_ptr<TASK>>& active_tasks,
+                            const vector<vector<vector<int>>>& known_cost_map,
+                            const vector<vector<OBJECT>>& known_object_map);
 
     // Path cache structures
     struct TaskPathInfo {
@@ -180,7 +194,7 @@ private:
         Coord task_coord;
 
         TaskPathInfo() : path_cost(std::numeric_limits<int>::max()), task_cost(std::numeric_limits<int>::max()) {}
-        TaskPathInfo(const std::vector<ROBOT::ACTION>& acts, 
+        TaskPathInfo(const std::vector<ROBOT::ACTION>& acts,
                     const std::vector<Coord>& coords,
                     int pc, int tc, const Coord& tcrd)
             : actions(acts), coordinates(coords), path_cost(pc), task_cost(tc), task_coord(tcrd) {}
@@ -190,7 +204,7 @@ private:
     std::map<int, std::queue<TaskPathInfo>> robot_path_cache;
 
     // Helper methods for path cache
-    void updatePathCache(int robot_id, 
+    void updatePathCache(int robot_id,
                         const std::vector<shared_ptr<TASK>>& active_tasks,
                         const vector<vector<vector<int>>>& known_cost_map,
                         const vector<vector<OBJECT>>& known_object_map,
@@ -198,6 +212,26 @@ private:
     
     void clearPathCache(int robot_id);
     bool isPathCacheValid(int robot_id, const Coord& current_pos) const;
+
+    // Add new private members
+    vector<TaskCluster> task_clusters;
+
+    // Add new private methods
+    void clusterTasks(const vector<shared_ptr<TASK>>& active_tasks,
+                     const vector<shared_ptr<ROBOT>>& robots,
+                     const vector<vector<vector<int>>>& known_cost_map,
+                     const vector<vector<OBJECT>>& known_object_map);
+    
+    void findClusterEndpoints(TaskCluster& cluster,
+                            const vector<shared_ptr<TASK>>& active_tasks,
+                            const vector<shared_ptr<ROBOT>>& robots,
+                            const vector<vector<vector<int>>>& known_cost_map,
+                            const vector<vector<OBJECT>>& known_object_map);
+    
+    int calculatePathCost(const Coord& start, const Coord& end,
+                         const ROBOT& robot,
+                         const vector<vector<vector<int>>>& known_cost_map,
+                         const vector<vector<OBJECT>>& known_object_map);
 
 public:
     // Static helper function for move cost
@@ -207,13 +241,6 @@ public:
         if (c1 == c2) return 0; // No cost if not moving
 
         int type_idx = static_cast<int>(r_type);
-        // Cost to leave c1 and enter c2. Per problem: (cost[c1] + cost[c2]) / 2
-        // From simulator.h, cost_map[x][y] is a vector of costs for different robot types.
-        // cost_at(coord, type) returns cost_map[coord.x][coord.y][static_cast<size_t>(type)]
-        
-        // Ensure coordinates are within map bounds before accessing cost_map
-        // This check should ideally be part of a map utility or done by the caller (Dijkstra)
-        // For now, assume valid coords are passed or Dijkstra handles it.
         int cost1 = cost_map[c1.x][c1.y][type_idx];
         int cost2 = cost_map[c2.x][c2.y][type_idx];
 
@@ -225,6 +252,47 @@ public:
     
     // Method to print the task_total_costs table
     void print_task_total_costs_table(const vector<shared_ptr<ROBOT>>& all_robots, const vector<shared_ptr<TASK>>& all_tasks) const;
+
+    // Debug method to print robot task queues
+    void print_robot_task_queues(const vector<shared_ptr<ROBOT>>& robots, const vector<shared_ptr<TASK>>& active_tasks) const {
+        std::cout << "\n=== Robot Task Queues Status ===" << std::endl;
+        for (const auto& robot : robots) {
+            std::cout << "Robot " << robot->id << " (" << robot->type << "): ";
+            if (robotTaskQueue.count(robot->id) && !robotTaskQueue.at(robot->id).empty()) {
+                std::cout << "Queue: [";
+                std::queue<int> temp_queue = robotTaskQueue.at(robot->id);
+                bool first = true;
+                while (!temp_queue.empty()) {
+                    if (!first) std::cout << " -> ";
+                    int task_id = temp_queue.front();
+                    temp_queue.pop();
+                    
+                    // Find task coordinates
+                    Coord task_coord;
+                    for (const auto& task : active_tasks) {
+                        if (task->id == task_id) {
+                            task_coord = task->coord;
+                            break;
+                        }
+                    }
+                    
+                    std::cout << "Task " << task_id << " at " << task_coord;
+                    first = false;
+                }
+                std::cout << "]";
+            } else {
+                std::cout << "No tasks in queue";
+            }
+            std::cout << " | Current Position: " << robot->get_coord();
+            if (robotExpectedPosition.count(robot->id)) {
+                std::cout << " | Expected Position: " << robotExpectedPosition.at(robot->id);
+            }
+            std::cout << " | Energy: " << robot->get_energy();
+            std::cout << " | Status: " << robot->get_status();
+            std::cout << std::endl;
+        }
+        std::cout << "==============================\n" << std::endl;
+    }
 };
 
-#endif SCHEDULER_H_
+#endif
