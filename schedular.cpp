@@ -13,14 +13,14 @@
 // Coord already has operator< defined in simulator.h
 
 int Scheduler::dijkstra(const Coord& start,
-                        const Coord& goal,
-                        const ROBOT& robot,
-                        const int task_cost_for_robot,
-                        const vector<vector<vector<int>>>& known_cost_map,
-                        const vector<vector<OBJECT>>& known_object_map,
-                        int map_size, // Assuming map_size = known_cost_map.size()
-                        std::vector<ROBOT::ACTION>& out_path_actions,
-                        std::vector<Coord>& out_path_coords)
+    const Coord& goal,
+    const ROBOT& robot,
+    const int task_cost_for_robot,
+    const vector<vector<vector<int>>>& known_cost_map,
+    const vector<vector<OBJECT>>& known_object_map,
+    int map_size, // Assuming map_size = known_cost_map.size()
+    std::vector<ROBOT::ACTION>& out_path_actions,
+    std::vector<Coord>& out_path_coords)
 {
     out_path_actions.clear();
     out_path_coords.clear();
@@ -29,8 +29,8 @@ int Scheduler::dijkstra(const Coord& start,
         out_path_coords.push_back(start);
         return 0; // No cost if already at the goal
     }
-    
-    if (map_size <= 0 || known_cost_map.empty() || (known_cost_map[0].empty() && map_size >0) ) {
+
+    if (map_size <= 0 || known_cost_map.empty() || (known_cost_map[0].empty() && map_size > 0)) {
         return std::numeric_limits<int>::max();
     }
 
@@ -39,16 +39,24 @@ int Scheduler::dijkstra(const Coord& start,
     std::map<Coord, ROBOT::ACTION> parent_action;
 
     std::priority_queue<std::pair<int, Coord>,
-                        std::vector<std::pair<int, Coord>>,
-                        std::greater<std::pair<int, Coord>>> pq;
+        std::vector<std::pair<int, Coord>>,
+        std::greater<std::pair<int, Coord>>> pq;
 
     dist[start] = 0;
-    pq.push({0, start});
+    pq.push({ 0, start });
 
     const ROBOT::TYPE robot_type = robot.type;
     const int initial_robot_energy = robot.get_energy();
 
-    Coord current_coord_pq; // Renamed to avoid conflict with other current_coord variables if any
+    // 각 로봇 타입별 미탐색 영역에 할당할 최대 cost
+    int max_unknown_cost = 0;
+    switch (robot_type) {
+    case ROBOT::TYPE::CATERPILLAR: max_unknown_cost = 398; break;
+    case ROBOT::TYPE::WHEEL:       max_unknown_cost = 846; break;
+    default: max_unknown_cost = INFINITE; break; // 드론은 경로 탐색 자체를 안 하니까 무시
+    }
+
+    Coord current_coord_pq;
     int current_cost_pq;
 
     while (!pq.empty()) {
@@ -56,7 +64,7 @@ int Scheduler::dijkstra(const Coord& start,
         current_coord_pq = pq.top().second;
         pq.pop();
 
-        if (dist.count(current_coord_pq) && current_cost_pq > dist.at(current_coord_pq)) { // Use .at() for safety after check
+        if (dist.count(current_coord_pq) && current_cost_pq > dist.at(current_coord_pq)) {
             continue;
         }
 
@@ -76,7 +84,7 @@ int Scheduler::dijkstra(const Coord& start,
             return current_cost_pq;
         }
 
-        ROBOT::ACTION all_actions[] = {ROBOT::ACTION::UP, ROBOT::ACTION::DOWN, ROBOT::ACTION::LEFT, ROBOT::ACTION::RIGHT};
+        ROBOT::ACTION all_actions[] = { ROBOT::ACTION::UP, ROBOT::ACTION::DOWN, ROBOT::ACTION::LEFT, ROBOT::ACTION::RIGHT };
         for (ROBOT::ACTION action : all_actions) {
             Coord delta = action_to_delta(action);
             Coord next_coord = current_coord_pq + delta;
@@ -84,56 +92,91 @@ int Scheduler::dijkstra(const Coord& start,
             if (next_coord.x < 0 || next_coord.x >= map_size || next_coord.y < 0 || next_coord.y >= map_size) {
                 continue;
             }
+
+            // 벽은 항상 통과 불가
             if (known_object_map.at(next_coord.x).at(next_coord.y) == OBJECT::WALL) {
                 continue;
             }
+
             size_t robot_type_idx = static_cast<size_t>(robot_type);
-            if (robot_type_idx >= known_cost_map.at(next_coord.x).at(next_coord.y).size() ||
-                known_cost_map.at(next_coord.x).at(next_coord.y).at(robot_type_idx) == -1 ) {
-                continue;
+
+            // === [수정] UNKNOWN 영역의 처리 ===
+            // known_cost_map[x][y][type]이 -1 또는 known_object_map이 UNKNOWN 이면 max_unknown_cost로 간주
+            int edge_cost = INFINITE;
+            bool unknown_zone = false;
+            if (
+                (known_object_map.at(next_coord.x).at(next_coord.y) == OBJECT::UNKNOWN)
+                || (robot_type_idx >= known_cost_map.at(next_coord.x).at(next_coord.y).size())
+                || (known_cost_map.at(next_coord.x).at(next_coord.y).at(robot_type_idx) == -1)
+                ) {
+                // 미탐색 지역 → 최대값
+                edge_cost = max_unknown_cost;
+                unknown_zone = true;
+            }
+            else {
+                edge_cost = Scheduler::calculate_move_cost(current_coord_pq, next_coord, robot_type, known_cost_map);
             }
 
-            int edge_cost = Scheduler::calculate_move_cost(current_coord_pq, next_coord, robot_type, known_cost_map);
+            // 만약 현재/다음 둘 다 UNKNOWN 이라면, 둘 다 max_unknown_cost 반영해야 하므로
+            // calculate_move_cost에서는 평균값을 쓰니까, 여기서도
+            // edge_cost = (c1+c2)/2, 둘 다 UNKNOWN이면 둘 다 max_unknown_cost로
+            if (unknown_zone) {
+                // 두 좌표가 모두 UNKNOWN이면 평균값 유지
+                bool prev_unknown = (known_object_map.at(current_coord_pq.x).at(current_coord_pq.y) == OBJECT::UNKNOWN)
+                    || (robot_type_idx >= known_cost_map.at(current_coord_pq.x).at(current_coord_pq.y).size())
+                    || (known_cost_map.at(current_coord_pq.x).at(current_coord_pq.y).at(robot_type_idx) == -1);
+                if (prev_unknown) {
+                    edge_cost = max_unknown_cost;
+                }
+                else {
+                    // 이전은 아는 구역, 다음만 모르면 평균값: (알고 있는 cost + max_unknown_cost)/2
+                    int prev_cost = (robot_type_idx >= known_cost_map.at(current_coord_pq.x).at(current_coord_pq.y).size())
+                        ? max_unknown_cost
+                        : known_cost_map.at(current_coord_pq.x).at(current_coord_pq.y).at(robot_type_idx);
+                    edge_cost = (prev_cost + max_unknown_cost) / 2;
+                }
+            }
 
             if (edge_cost == INFINITE) {
                 continue;
             }
-            
+
             int new_cost = current_cost_pq + edge_cost;
-            
-            // Energy pruning conditions from problem statement
-            if (task_cost_for_robot != INFINITE) { // Only prune if task_cost is known (not for pure pathfinding)
-                 if (new_cost >= initial_robot_energy - task_cost_for_robot) { // Original condition: dist >= robot.energy - taskCost
-                    if (next_coord == goal) { // If it's the goal, this cost is fine if it's exactly energy - task_cost
-                        if (new_cost > initial_robot_energy - task_cost_for_robot) continue; // Strictly more, then prune
-                    } else {
-                        continue; // Not the goal, and already at the energy limit for path part
+
+            // Energy pruning (이 아래는 그대로 유지)
+            if (task_cost_for_robot != INFINITE) {
+                if (new_cost >= initial_robot_energy - task_cost_for_robot) {
+                    if (next_coord == goal) {
+                        if (new_cost > initial_robot_energy - task_cost_for_robot) continue;
+                    }
+                    else {
+                        continue;
                     }
                 }
-            } else { // Pure pathfinding, no task cost to consider for this specific pruning rule
-                 if (new_cost >= initial_robot_energy && next_coord != goal) { // Path cost alone exceeds total energy
+            }
+            else {
+                if (new_cost >= initial_robot_energy && next_coord != goal) {
                     continue;
                 }
             }
-            // General check: total energy for path + task must not exceed initial energy IF it's the goal
-            if (next_coord == goal && task_cost_for_robot != INFINITE && (new_cost + task_cost_for_robot > initial_robot_energy) ){
+            if (next_coord == goal && task_cost_for_robot != INFINITE && (new_cost + task_cost_for_robot > initial_robot_energy)) {
                 continue;
             }
-             // General check: path cost must not exceed initial energy
             if (new_cost > initial_robot_energy) {
-                 continue;
+                continue;
             }
 
             if (!dist.count(next_coord) || new_cost < dist.at(next_coord)) {
                 dist[next_coord] = new_cost;
                 parent_coord[next_coord] = current_coord_pq;
                 parent_action[next_coord] = action;
-                pq.push({new_cost, next_coord});
+                pq.push({ new_cost, next_coord });
             }
         }
     }
     return std::numeric_limits<int>::max();
 }
+
 
 void Scheduler::checkForNewTasks(const vector<shared_ptr<TASK>>& active_tasks) {
     for (const auto& task : active_tasks) {
@@ -187,11 +230,24 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
 {
     int map_size = known_cost_map.size();
     
-    // Check if we should start task assignment (9 active tasks or already started)
+    //----------------------------------------------------------------------------------------
+    //// Check if we should start task assignment (9 active tasks or already started)
+    //static bool has_started_assignments = false;
+    //if (!has_started_assignments && active_tasks.size() >= 4) {
+    //    has_started_assignments = true;
+    //}
+    //----------------------------------------------------------------------------------------
+    // 시간 카운터를 static으로 선언 (이 함수는 tick마다 호출됨)
+    static int current_time = 0;
     static bool has_started_assignments = false;
-    if (!has_started_assignments && active_tasks.size() >= 9) {
+
+    current_time++; // 함수가 호출될 때마다 1씩 증가 (tick 증가)
+
+    // 100틱 이상부터 할당 시작
+    if (!has_started_assignments && current_time >= 100) {
         has_started_assignments = true;
     }
+    //----------------------------------------------------------------------------------------
 
     // Initialize robot positions if not set
     for (const auto& robot : robots) {
