@@ -63,6 +63,9 @@ int Scheduler::dijkstra(const Coord& start,
             return std::numeric_limits<int>::max();
         }
 
+        //if (current_cost_pq > initial_robot_energy - task_cost_for_robot)
+        //    return std::numeric_limits<int>::max();
+
         if (dist.count(current_coord_pq) && current_cost_pq > dist.at(current_coord_pq)) { // Use .at() for safety after check
             continue;
         }
@@ -175,9 +178,26 @@ bool Scheduler::shouldTriggerReassignment(const set<Coord>& updated_coords,
     if(needs_reassignment){
         return true;
     }
+    ///////////////////
+    bool idle_exists = std::any_of(robots.begin(), robots.end(),
+        [](const auto& r) {
+            return r->type != ROBOT::TYPE::DRONE &&
+                r->get_status() == ROBOT::STATUS::IDLE;
+        });
+
+    bool unfinished_task_exists = std::any_of(active_tasks.begin(), active_tasks.end(),
+        [](const auto& t) { return !t->is_done(); });
+
+    if (idle_exists && unfinished_task_exists) return true;
+    ///////////////////
     return false;
 }
-
+Scheduler::Scheduler()
+    : tick_counter_(0),          // 초기화 리스트
+    has_started_assignments(false)
+{
+    // 생성자 본문이 비어 있어도 됨
+}
 void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                                 const set<Coord> &updated_coords,
                                 const vector<vector<vector<int>>> &known_cost_map,
@@ -185,6 +205,17 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                                 const vector<shared_ptr<TASK>> &active_tasks,
                                 const vector<shared_ptr<ROBOT>> &robots)
 {
+    /*----- 틱 카운트 -----*/
+    ++tick_counter_;
+
+    /*----- 100틱 체크 -----*/
+    if (!has_started_assignments && tick_counter_ >= 100)
+        has_started_assignments = true;
+
+    if (!has_started_assignments)
+        return;                // 아직 100틱 미만이면 아무것도 하지 않음
+    
+
     int map_size = int(known_cost_map.size());
     
     bool NO_IDLE = true;
@@ -198,10 +229,18 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     if(NO_IDLE == true) {return;}
     needs_reassignment=false;
     // Check if we should start task assignment (9 active tasks or already started) 수정필
-    static bool has_started_assignments = false;
-    if (!has_started_assignments && active_tasks.size() >= 9) {
-        has_started_assignments = true;
-    }
+    //static bool has_started_assignments = false;
+    //if (!has_started_assignments && active_tasks.size() >= 9) {
+    //    has_started_assignments = true;
+    //}
+    
+    //static bool has_started_assignments = false;
+    //if (!has_started_assignments && tick_counter >= 100) {
+    //    has_started_assignments = true;      // 100틱째부터 작업 할당 시작
+    //}
+    //if (!has_started_assignments) {
+    //    return;  // 아직 100틱이 안 됐으면 아무것도 하지 않고 종료
+    //}
 
     // Initialize robot positions if not set
     for (const auto& robot : robots) {

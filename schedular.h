@@ -66,12 +66,16 @@ public:
                               const vector<shared_ptr<TASK>> &active_tasks,
                               const vector<shared_ptr<ROBOT>> &robots,
                               const ROBOT &robot);
+    Scheduler();
 
 private:
     // Constants for clustering and energy management
     const int CLUSTER_DISTANCE_THRESHOLD = 1400;  // 클러스터링 거리 임계값
     const int ENERGY_MARGIN_PERCENT = 10;         // 에너지 여유 비율 (%)
-    const int MAX_CLUSTER_SIZE = 4;              // 최대 클러스터 크기 (태스크 개수)
+    const int MAX_CLUSTER_SIZE = 3;              // 최대 클러스터 크기 (태스크 개수)
+
+    int  tick_counter_ = 0;   // 틱 카운트
+    bool has_started_assignments = false; // 100틱 이후 true
 
     // Robot_id -> goal_coord -> PathInfo
     std::map<int, std::map<Coord, PathInfo>> path_cache;
