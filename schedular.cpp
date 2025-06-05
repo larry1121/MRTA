@@ -185,6 +185,15 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                                 const vector<shared_ptr<TASK>> &active_tasks,
                                 const vector<shared_ptr<ROBOT>> &robots)
 {
+    ++tick_counter;                                     // 1) tick 증가
+    unsigned long long now_tick = tick_counter;         // 2) 현재 tick 값을 지역변수에 저장
+
+    /* 3) --- isDormant 람다를 먼저 선언 --- */
+    auto isDormant = [&](int tid) -> bool {
+        auto it = task_dormant_until.find(tid);
+        return it != task_dormant_until.end() && it->second > now_tick;
+        };
+
     int map_size = int(known_cost_map.size());
     
     bool NO_IDLE = true;
@@ -219,12 +228,19 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
     bool has_available_tasks = false;
     bool has_new_tasks = false;
     
-    for (const auto& robot : robots) {
-        if (robot->get_status() == ROBOT::STATUS::IDLE &&
-            robotTaskQueue[robot->id].empty()&&robot->type != ROBOT::TYPE::DRONE) {
-            has_idle_robots = true;
-            break;
+    for (const auto& r : robots) {
+        if (r->type == ROBOT::TYPE::DRONE) continue;              // 정찰용 제외
+        if (r->get_status() != ROBOT::STATUS::IDLE) continue;     // IDLE 아니면 건너뜀
+
+        /* 이 로봇이 수행할 수 있는 태스크가 최소 1개라도 있는가? */
+        bool feasible = false;
+        for (const auto& t : active_tasks) {
+            if (isDormant(t->id) || t->is_done()) continue;       // 휴면·완료 태스크 skip
+            int cost = t->get_cost(r->type);
+            if (cost == INFINITE || cost > r->get_energy()) continue; // 불가능
+            feasible = true; break;
         }
+        if (feasible) { has_idle_robots = true; break; }
     }
     
     for (const auto& task : active_tasks) {
@@ -787,233 +803,554 @@ bool Scheduler::isTaskAlreadyAssigned(int taskId) const {
     return false;
 }
 
-void Scheduler::performMinMinAssignment(const vector<shared_ptr<TASK>>& active_tasks,
-                                      const vector<shared_ptr<ROBOT>>& robots,
-                                      const vector<vector<vector<int>>>& known_cost_map,
-                                      const vector<vector<OBJECT>>& known_object_map) {
-    std::cout << "\nPerforming Cluster-based Min-Min Assignment" << std::endl;
-    
-    // Clear existing assignments for reassignment
-    for (auto& robot_queue : robotTaskQueue) {
-        while (!robot_queue.second.empty()) {
-            robot_queue.second.pop();
+// ────────────────────────────────────────────────────────────────
+// ⬇️ NEW: 태스크 쌍 거리 캐시 Helper
+// ----------------------------------------------------------------
+int Scheduler::getPairDistance(int tid1, int tid2,
+    const vector<shared_ptr<TASK>>& active_tasks,
+    const shared_ptr<ROBOT>& wheel_robot,
+    const shared_ptr<ROBOT>& cater_robot,
+    const vector<vector<vector<int>>>& known_cost_map,
+    const vector<vector<OBJECT>>& known_object_map)
+{
+    if (tid1 == tid2) return 0;
+    long long key = (static_cast<long long>(min(tid1, tid2)) << 32) | max(tid1, tid2);
+    auto it = pair_dist_cache.find(key);
+    if (it != pair_dist_cache.end()) return it->second;
+
+    const TASK* t1 = nullptr; const TASK* t2 = nullptr;
+    for (const auto& t : active_tasks) {
+        if (t->id == tid1) t1 = t.get();
+        if (t->id == tid2) t2 = t.get();
+    }
+    if (!t1 || !t2) return INFINITE;
+
+    std::vector<ROBOT::ACTION> a1, a2; std::vector<Coord> c1, c2;
+    int d1 = dijkstra(t1->coord, t2->coord, *wheel_robot, 0,
+        known_cost_map, known_object_map,
+        known_cost_map.size(), a1, c1);
+    int d2 = dijkstra(t1->coord, t2->coord, *cater_robot, 0,
+        known_cost_map, known_object_map,
+        known_cost_map.size(), a2, c2);
+    int dist = std::max(d1, d2);
+    pair_dist_cache[key] = dist;
+    return dist;
+}
+
+// ────────────────────────────────────────────────────────────────
+// ⬇️ NEW: Adaptive Split (재귀)
+// ----------------------------------------------------------------
+void Scheduler::splitClusterAdaptive(int cluster_idx,
+    const vector<shared_ptr<TASK>>& active_tasks,
+    const vector<shared_ptr<ROBOT>>& robots,
+    const vector<vector<vector<int>>>& known_cost_map,
+    const vector<vector<OBJECT>>& known_object_map)
+{
+    unsigned long long now_tick = tick_counter;
+
+    if (cluster_idx < 0 || cluster_idx >= static_cast<int>(task_clusters.size())) return;
+    TaskCluster cluster = task_clusters[cluster_idx];
+    if (cluster.task_ids.size() <= 1) return;   // 더 못 나눔
+
+    // 작업 로봇 두 종류 찾기
+    shared_ptr<ROBOT> wheel_robot = nullptr, cater_robot = nullptr;
+    for (const auto& r : robots) {
+        if (r->type == ROBOT::TYPE::WHEEL)       wheel_robot = r;
+        else if (r->type == ROBOT::TYPE::CATERPILLAR) cater_robot = r;
+    }
+    if (!wheel_robot || !cater_robot) return;
+
+    // 1) 가장 긴 내부 edge 탐색
+    int max_dist = -1, cut_idx = -1;
+    for (size_t i = 0;i < cluster.task_ids.size() - 1;++i) {
+        int d = getPairDistance(cluster.task_ids[i], cluster.task_ids[i + 1],
+            active_tasks, wheel_robot, cater_robot,
+            known_cost_map, known_object_map);
+        if (d > max_dist) {
+            max_dist = d; cut_idx = static_cast<int>(i);
         }
     }
+    if (cut_idx == -1) return;
+
+    // 2) 두 개의 task id 벡터로 분할
+    vector<int> left(cluster.task_ids.begin(), cluster.task_ids.begin() + cut_idx + 1);
+    vector<int> right(cluster.task_ids.begin() + cut_idx + 1, cluster.task_ids.end());
+
+    auto buildCluster = [&](const vector<int>& ids)->TaskCluster {
+        TaskCluster nc; nc.task_ids = ids;
+        // 시작/끝/비용 간단히 채워두고 후속 findClusterEndpoints 호출에 맡김
+        nc.start_task_id = ids.front(); nc.end_task_id = ids.back();
+        return nc;
+        };
+
+    TaskCluster leftC = buildCluster(left);
+    TaskCluster rightC = buildCluster(right);
+
+    // 3) 기존 위치에 left 덮어쓰기, right 는 push_back
+    task_clusters[cluster_idx] = leftC;
+    task_clusters.push_back(rightC);
+
+    if (left.size() == cluster.task_ids.size() || right.empty()) {
+        // 실제로 쪼개지지 않았음 → 더 이상 split 불가
+        unassignable_clusters.insert(cluster_idx);
+        return;
+    }
+}
+
+// ────────────────────────────────────────────────────────────────
+// ⬇️ NEW: Greedy Merge (여유 에너지 삽입)
+// ----------------------------------------------------------------
+void Scheduler::optimizeRobotSlack(const vector<shared_ptr<ROBOT>>& robots,
+    const vector<shared_ptr<TASK>>& active_tasks,
+    const vector<vector<vector<int>>>& known_cost_map,
+    const vector<vector<OBJECT>>& known_object_map)
+{
+    unsigned long long now_tick = tick_counter;
+
+    for (const auto& r : robots) {
+        if (r->type == ROBOT::TYPE::DRONE || r->get_status() == ROBOT::STATUS::EXHAUSTED) continue;
+        if (robotTaskQueue[r->id].empty()) continue;
+
+        // slack 계산
+        int used = 0;
+        std::queue<int> qcpy = robotTaskQueue[r->id];
+        int prev_task_id = -1;
+        while (!qcpy.empty()) {
+            int tid = qcpy.front(); qcpy.pop();
+            for (const auto& t : active_tasks) {
+                if (t->id == tid) {
+                    used += t->get_cost(r->type);
+                    if (prev_task_id != -1) {
+                        used += getPairDistance(prev_task_id, tid,
+                            active_tasks,
+                            (r->type == ROBOT::TYPE::WHEEL ? r : robots[0]), // dummy
+                            (r->type == ROBOT::TYPE::CATERPILLAR ? r : robots[0]),
+                            known_cost_map, known_object_map);
+                    }
+                    prev_task_id = tid;
+                    break;
+                }
+            }
+        }
+        int slack = r->get_energy() - used;
+        if (slack < 50) continue; // 여유 거의 없음
+
+        // 아직 queue 에 없고, 미할당이며 가까운 태스크 하나 삽입 시도
+        int best_tid = -1, best_extra = INT_MAX;
+        Coord refCoord;
+        // find coord of last task
+        int last_tid = robotTaskQueue[r->id].back();
+        for (const auto& t : active_tasks) {
+            if (t->id == last_tid) { refCoord = t->coord; break; }
+        }
+
+        for (const auto& t : active_tasks) {
+            if (isTaskAlreadyAssigned(t->id)) continue;
+            int extra = dijkstra(refCoord, t->coord, *r, t->get_cost(r->type),
+                known_cost_map, known_object_map,
+                known_cost_map.size(),
+                *(new vector<ROBOT::ACTION>),
+                *(new vector<Coord>));
+            if (extra == INFINITE) continue;
+            extra += t->get_cost(r->type);
+            if (extra < best_extra && extra < slack * 0.9) {
+                best_extra = extra; best_tid = t->id;
+            }
+        }
+        if (best_tid != -1) {
+            robotTaskQueue[r->id].push(best_tid);
+            // 할당 마킹
+            robotToTask[r->id] = robotTaskQueue[r->id].front();
+        }
+    }
+}
+
+/*───────────────────────────────────────────────────────────*/
+/*  Adaptive Min-Min + Dormant & Unassignable 처리 버전     */
+/*───────────────────────────────────────────────────────────*/
+void Scheduler::performMinMinAssignment(
+    const vector<shared_ptr<TASK>>& active_tasks,
+    const vector<shared_ptr<ROBOT>>& robots,
+    const vector<vector<vector<int>>>& known_cost_map,
+    const vector<vector<OBJECT>>& known_object_map)
+{
+    std::cout << "\nPerforming *Adaptive* Min-Min Assignment\n";
+
+    /* 0) 이전 결과 초기화 */
+    for (auto& kv : robotTaskQueue) while (!kv.second.empty()) kv.second.pop();
     robotToTask.clear();
     robotCurrentTaskEndTime.clear();
-    
-    for (auto& robot : robots){
-        robotExpectedPosition[robot->id] = robot->get_coord();
-    }
-    
-    // Create set of unassigned clusters
-    std::set<int> unassigned_clusters;
-    for (size_t i = 0; i < task_clusters.size(); i++) {
-        unassigned_clusters.insert(i);
-    }
 
-    while (!unassigned_clusters.empty()) {
-        int best_cluster_idx = -1;
-        int best_robot_id = -1;
-        int min_completion_time = std::numeric_limits<int>::max();
+    /* 1) 시간값 & 헬퍼 준비 */
+    unsigned long long now_tick = tick_counter;
 
-        std::cout << "\nFinding best cluster-robot pair from " << unassigned_clusters.size() << " unassigned clusters" << std::endl;
+    auto isDormant = [&](int tid) -> bool {
+        auto it = task_dormant_until.find(tid);
+        return it != task_dormant_until.end() && it->second > now_tick;
+        };
 
-        // Find cluster-robot pair with minimum completion time
-        for (int cluster_idx : unassigned_clusters) {
-            const TaskCluster& cluster = task_clusters[cluster_idx];
-            std::cout << "\nEvaluating Cluster " << cluster_idx << ":" << std::endl;
-            std::cout << "  Tasks: ";
-            for (int task_id : cluster.task_ids) {
-                std::cout << task_id << " ";
-            }
-            std::cout << "\n  Start Task: " << cluster.start_task_id
-                     << " at " << cluster.start_pos << std::endl;
-            std::cout << "  End Task: " << cluster.end_task_id
-                     << " at " << cluster.end_pos << std::endl;
+    /* 2) unassigned 클러스터 set 준비  */
+    unassignable_clusters.clear();                 // 이번 라운드에 새로 판단
+    std::set<int> unassigned;
+    for (size_t i = 0; i < task_clusters.size(); ++i)
+        unassigned.insert(static_cast<int>(i));
 
-            for (const auto& robot : robots) {
-                if (robot->type == ROBOT::TYPE::DRONE ||
-                    robot->get_status() == ROBOT::STATUS::EXHAUSTED) continue;
+    /* 3) 메인 루프 : 할당 가능한 (로봇, 클러스터) 쌍을 반복적으로 확정 */
+    while (!unassigned.empty())
+    {
+        int best_cluster = -1;
+        int best_robot = -1;
+        int best_cost = std::numeric_limits<int>::max();
 
-                // Get robot's current position
-                Coord robot_pos = robotExpectedPosition.count(robot->id) ?
-                                robotExpectedPosition[robot->id] :
-                                robot->get_coord();
+        /* 3-1) 모든 조합 탐색 */
+        for (int cidx : unassigned)
+        {
+            if (unassignable_clusters.count(cidx)) continue;  // 이미 불가 판정
+            TaskCluster& C = task_clusters[cidx];
 
-                // Check if robot's expected position is valid
-                if (known_object_map[robot_pos.x][robot_pos.y] == OBJECT::WALL) {
-                    // If expected position is invalid, use actual position
-                    robot_pos = robot->get_coord();
-                    robotExpectedPosition[robot->id] = robot_pos;
-                }
+            /* (클러스터 안에 dormant 태스크만 있다면 skip) */
+            bool allDormant = true;
+            for (int tid : C.task_ids)
+                if (!isDormant(tid)) { allDormant = false; break; }
+            if (allDormant) continue;
 
-                // Calculate path cost to both endpoints
-                std::vector<ROBOT::ACTION> start_path_actions, end_path_actions;
-                std::vector<Coord> start_path_coords, end_path_coords;
-                int start_path_cost = dijkstra(robot_pos,
-                                             cluster.start_pos,
-                                             *robot,
-                                             0,  // task_cost는 0으로 설정 (순수 이동 비용만 계산)
-                                             known_cost_map,
-                                             known_object_map,
-                                             known_cost_map.size(),
-                                             start_path_actions,
-                                             start_path_coords);
-
-                int end_path_cost = dijkstra(robot_pos,
-                                           cluster.end_pos,
-                                           *robot,
-                                           0,  // task_cost는 0으로 설정 (순수 이동 비용만 계산)
-                                           known_cost_map,
-                                           known_object_map,
-                                           known_cost_map.size(),
-                                           end_path_actions,
-                                           end_path_coords);
-
-                // Skip if no valid path to either point
-                if (start_path_cost == std::numeric_limits<int>::max() &&
-                    end_path_cost == std::numeric_limits<int>::max()) {
+            for (const auto& rp : robots)
+            {
+                if (rp->type == ROBOT::TYPE::DRONE ||
+                    rp->get_status() == ROBOT::STATUS::EXHAUSTED)
                     continue;
-                }
 
-                // Create a modified cluster with the correct task order
-                TaskCluster modified_cluster = cluster;
-                int path_cost;
-                
-                if (start_path_cost <= end_path_cost) {
-                    // Use original order (start -> end)
-                    path_cost = start_path_cost;
-                } else {
-                    // Reverse the task order (end -> start)
-                    path_cost = end_path_cost;
-                    std::reverse(modified_cluster.task_ids.begin(), modified_cluster.task_ids.end());
-                    modified_cluster.start_pos = cluster.end_pos;
-                    modified_cluster.end_pos = cluster.start_pos;
-                    modified_cluster.start_task_id = cluster.end_task_id;
-                    modified_cluster.end_task_id = cluster.start_task_id;
-                }
-                
-                // Calculate total cost including cluster's internal cost
-                int total_cost;
-                if (path_cost > std::numeric_limits<int>::max() - modified_cluster.total_cost) {
-                    // Overflow would occur, skip this assignment
-                    continue;
-                }
-                total_cost = path_cost + modified_cluster.total_cost;
+                /* ① 로봇 → 클러스터 첫 태스크까지 경로 비용 */
+                const TASK* firstTask = nullptr;
+                for (auto& t : active_tasks)
+                    if (t->id == C.task_ids.front()) { firstTask = t.get(); break; }
+                if (!firstTask) continue;
 
-                // Skip if insufficient energy
-                int required_energy = total_cost*1.05;
-                if(cluster.task_ids.size()>=3) required_energy = total_cost*1.1;
-                if (robot->get_energy() < required_energy) {
-                    continue;
-                }
+                std::vector<ROBOT::ACTION> tmpA; std::vector<Coord> tmpC;
+                int pathCost = dijkstra(rp->get_coord(), firstTask->coord,
+                    *rp, 0, known_cost_map, known_object_map,
+                    known_cost_map.size(), tmpA, tmpC);
+                if (pathCost == INFINITE) continue;
 
-                // Calculate completion time
-                int completion_time = calculateTaskCompletionTime(robot->id, 
-                                                                  modified_cluster.start_task_id,
-                                                               active_tasks,
-                                                               known_cost_map,
-                                                               known_object_map,
-                                                               robots);
+                /* ② 클러스터 내부 작업/이동 비용 단순합 */
+                int execCost = 0;
+                for (size_t k = 0; k < C.task_ids.size(); ++k)
+                {
+                    /* dormant task 는 건너뛰면 클러스터 의미가 깨지므로
+                       여기서는 포함하되 에너지 초과면 나중에 Split 하도록 함   */
+                    const TASK* taskPtr = nullptr;
+                    for (auto& t : active_tasks)
+                        if (t->id == C.task_ids[k]) { taskPtr = t.get(); break; }
 
-                // Skip if completion time is infinite
-                if (completion_time == std::numeric_limits<int>::max()) continue;
+                    if (!taskPtr) { execCost = INFINITE; break; }
+                    execCost += taskPtr->get_cost(rp->type);
 
-                std::cout << "  Robot " << robot->id << " (" << robot->type << ") at " << robot_pos
-                         << ": path cost = " << path_cost
-                         << ", cluster cost = " << modified_cluster.total_cost
-                         << ", total = " << total_cost
-                         << ", completion time = " << completion_time << std::endl;
-
-                
-                // If this is a better completion time
-                if (completion_time < min_completion_time) {
-                    min_completion_time = completion_time;
-                    best_cluster_idx = cluster_idx;
-                    best_robot_id = robot->id;
-                    // Store the modified cluster for later use
-                    task_clusters[cluster_idx] = modified_cluster;
-                    std::cout << "  -> New best assignment found!" << std::endl;
-                }
-            }
-        }
-
-        if (best_cluster_idx == -1) {
-            std::cout << "\nNo assignable cluster found in this iteration. Splitting remaining unassigned clusters." << std::endl;
-
-            // 현재 unassigned_clusters에 있는 인덱스들을 임시 저장
-            std::vector<int> clusters_to_split_indices;
-            for(int cluster_idx : unassigned_clusters) {
-                clusters_to_split_indices.push_back(cluster_idx);
-            }
-
-            unassigned_clusters.clear(); // 현재 unassigned 목록을 비우고 새로 추가될 단일 태스크 클러스터로 채울 준비
-
-            for(int original_cluster_idx : clusters_to_split_indices) {
-                const TaskCluster& cluster_to_split = task_clusters[original_cluster_idx];
-                 std::cout << "  Splitting Cluster " << cluster_to_split.task_ids[0] << "... (size " << cluster_to_split.task_ids.size() << ")" << std::endl;
-                
-                for(int task_id : cluster_to_split.task_ids) {
-                    TaskCluster single_task_cluster;
-                    single_task_cluster.task_ids.push_back(task_id);
-                    single_task_cluster.start_task_id = task_id;
-                    single_task_cluster.end_task_id = task_id;
-                    
-                    // 태스크 좌표 찾기
-                    Coord task_coord;
-                    for (const auto& task : active_tasks) {
-                        if (task->id == task_id) {
-                            task_coord = task->coord;
-                            break;
-                        }
+                    /* 태스크 간 이동 비용 */
+                    if (k + 1 < C.task_ids.size())
+                    {
+                        int nextTid = C.task_ids[k + 1];
+                        execCost += getPairDistance(taskPtr->id, nextTid,
+                            active_tasks,
+                            rp, rp,               // 아무 로봇이나 전달, 내부에서 타입무시
+                            known_cost_map,
+                            known_object_map);
                     }
-                    single_task_cluster.start_pos = task_coord;
-                    single_task_cluster.end_pos = task_coord;
-                    
-                    // 단일 태스크 클러스터의 총 비용은 해당 태스크의 최대 실행 비용
-                    int wheel_task_cost = std::numeric_limits<int>::max();
-                    int caterpillar_task_cost = std::numeric_limits<int>::max();
-                    for (const auto& task : active_tasks) {
-                        if (task->id == task_id) {
-                             wheel_task_cost = task->get_cost(ROBOT::TYPE::WHEEL);
-                             caterpillar_task_cost = task->get_cost(ROBOT::TYPE::CATERPILLAR);
-                            break;
-                        }
-                    }
-                    single_task_cluster.total_cost = std::max(wheel_task_cost, caterpillar_task_cost);
 
-                    // 분리된 단일 태스크를 새로운 클러스터 목록에 추가
-                    task_clusters.push_back(single_task_cluster);
-                    // 새로 추가된 클러스터의 인덱스를 unassigned 목록에 넣음
-                    unassigned_clusters.insert(task_clusters.size() - 1);
-                     std::cout << "    -> Created single task cluster for Task " << task_id << " (new index: " << task_clusters.size() - 1 << ")" << std::endl;
+                    if (execCost >= INFINITE / 2) break;
                 }
-                 // 분리된 원본 클러스터는 더 이상 고려하지 않음 (unassigned_cluster_indices에서 이미 비웠으므로)
+
+                if (execCost >= INFINITE / 2) continue;
+
+                int totalCost = pathCost + execCost;
+                if (totalCost > rp->get_energy() * 0.95) continue;  // 에너지 초과
+
+                if (totalCost < best_cost)
+                {
+                    best_cost = totalCost;
+                    best_cluster = cidx;
+                    best_robot = rp->id;
+                }
             }
-            break;
-            // 모든 불가능 클러스터를 분리했으므로, 다음 반복에서 분리된 단일 태스크 클러스터들을 대상으로 할당 재시도
         }
 
-        const TaskCluster& best_cluster = task_clusters[best_cluster_idx];
-        std::cout << "\nAssigning Cluster " << best_cluster_idx << " to Robot " << best_robot_id
-                 << " (completion time: " << min_completion_time << ")" << std::endl;
+        /* 3-2) 이번 라운드에서 할당 가능한 쌍을 찾지 못함 → Split or Dormant */
+        if (best_cluster == -1)
+        {
+            /* 후보 중 첫 클러스터를 Split 시도 */
+            int victim = *unassigned.begin();
+            TaskCluster& V = task_clusters[victim];
 
-        // Assign all tasks in the cluster to the robot
-        for (int task_id : best_cluster.task_ids) {
-            robotTaskQueue[best_robot_id].push(task_id);
+            /* 더 이상 쪼갤 수 없는 경우( size==1 ) ⇒ dormant 처리 */
+            if (V.task_ids.size() == 1)
+            {
+                int tid = V.task_ids.front();
+                task_dormant_until[tid] = now_tick + DORMANT_TTL;
+                unassigned.erase(victim);
+                continue;
+            }
+
+            /* 분할 */
+            splitClusterAdaptive(victim, active_tasks, robots,
+                known_cost_map, known_object_map);
+
+            /* split 후, original index 위치엔 left 클러스터,
+               right 클러스터가 push_back 되었으므로 unassigned 재구성 */
+            unassigned.clear();
+            for (size_t i = 0; i < task_clusters.size(); ++i)
+                if (!unassignable_clusters.count(static_cast<int>(i)))
+                    unassigned.insert(static_cast<int>(i));
+            continue;   // 다시 루프
         }
-        robotToTask[best_robot_id] = best_cluster.start_task_id;
-        robotCurrentTaskEndTime[best_robot_id] = min_completion_time;
 
-        // Update robot's expected position to the end position of the cluster
-        updateRobotPosition(best_robot_id, best_cluster.end_pos);
-        std::cout << "  Updated Robot " << best_robot_id << "'s expected position to " << best_cluster.end_pos << std::endl;
+        /* 3-3) best (로봇, 클러스터) 확정 */
+        TaskCluster& chosen = task_clusters[best_cluster];
+        std::cout << "  ▶ Robot " << best_robot << " ⇦ Cluster "
+            << best_cluster << "  (cost " << best_cost << ")\n";
 
-        unassigned_clusters.erase(best_cluster_idx);
+        for (int tid : chosen.task_ids)
+            robotTaskQueue[best_robot].push(tid);
+
+        robotToTask[best_robot] = robotTaskQueue[best_robot].front();
+        unassigned.erase(best_cluster);
     }
-     std::cout << "\nMin-Min Assignment finished." << std::endl;
+
+    /* 4) 여유 에너지로 태스크 끼워넣기(slack merge) */
+    optimizeRobotSlack(robots, active_tasks, known_cost_map, known_object_map);
+
+    std::cout << "Min-Min Assignment finished.\n";
 }
+
+// ────────────────────────────────────────────────────────────────
+
+
+
+//void Scheduler::performMinMinAssignment(const vector<shared_ptr<TASK>>& active_tasks,
+//                                      const vector<shared_ptr<ROBOT>>& robots,
+//                                      const vector<vector<vector<int>>>& known_cost_map,
+//                                      const vector<vector<OBJECT>>& known_object_map) {
+//    std::cout << "\nPerforming Cluster-based Min-Min Assignment" << std::endl;
+//    
+//    // Clear existing assignments for reassignment
+//    for (auto& robot_queue : robotTaskQueue) {
+//        while (!robot_queue.second.empty()) {
+//            robot_queue.second.pop();
+//        }
+//    }
+//    robotToTask.clear();
+//    robotCurrentTaskEndTime.clear();
+//    
+//    for (auto& robot : robots){
+//        robotExpectedPosition[robot->id] = robot->get_coord();
+//    }
+//    
+//    // Create set of unassigned clusters
+//    std::set<int> unassigned_clusters;
+//    for (size_t i = 0; i < task_clusters.size(); i++) {
+//        unassigned_clusters.insert(i);
+//    }
+//
+//    while (!unassigned_clusters.empty()) {
+//        int best_cluster_idx = -1;
+//        int best_robot_id = -1;
+//        int min_completion_time = std::numeric_limits<int>::max();
+//
+//        std::cout << "\nFinding best cluster-robot pair from " << unassigned_clusters.size() << " unassigned clusters" << std::endl;
+//
+//        // Find cluster-robot pair with minimum completion time
+//        for (int cluster_idx : unassigned_clusters) {
+//            const TaskCluster& cluster = task_clusters[cluster_idx];
+//            std::cout << "\nEvaluating Cluster " << cluster_idx << ":" << std::endl;
+//            std::cout << "  Tasks: ";
+//            for (int task_id : cluster.task_ids) {
+//                std::cout << task_id << " ";
+//            }
+//            std::cout << "\n  Start Task: " << cluster.start_task_id
+//                     << " at " << cluster.start_pos << std::endl;
+//            std::cout << "  End Task: " << cluster.end_task_id
+//                     << " at " << cluster.end_pos << std::endl;
+//
+//            for (const auto& robot : robots) {
+//                if (robot->type == ROBOT::TYPE::DRONE ||
+//                    robot->get_status() == ROBOT::STATUS::EXHAUSTED) continue;
+//
+//                // Get robot's current position
+//                Coord robot_pos = robotExpectedPosition.count(robot->id) ?
+//                                robotExpectedPosition[robot->id] :
+//                                robot->get_coord();
+//
+//                // Check if robot's expected position is valid
+//                if (known_object_map[robot_pos.x][robot_pos.y] == OBJECT::WALL) {
+//                    // If expected position is invalid, use actual position
+//                    robot_pos = robot->get_coord();
+//                    robotExpectedPosition[robot->id] = robot_pos;
+//                }
+//
+//                // Calculate path cost to both endpoints
+//                std::vector<ROBOT::ACTION> start_path_actions, end_path_actions;
+//                std::vector<Coord> start_path_coords, end_path_coords;
+//                int start_path_cost = dijkstra(robot_pos,
+//                                             cluster.start_pos,
+//                                             *robot,
+//                                             0,  // task_cost는 0으로 설정 (순수 이동 비용만 계산)
+//                                             known_cost_map,
+//                                             known_object_map,
+//                                             known_cost_map.size(),
+//                                             start_path_actions,
+//                                             start_path_coords);
+//
+//                int end_path_cost = dijkstra(robot_pos,
+//                                           cluster.end_pos,
+//                                           *robot,
+//                                           0,  // task_cost는 0으로 설정 (순수 이동 비용만 계산)
+//                                           known_cost_map,
+//                                           known_object_map,
+//                                           known_cost_map.size(),
+//                                           end_path_actions,
+//                                           end_path_coords);
+//
+//                // Skip if no valid path to either point
+//                if (start_path_cost == std::numeric_limits<int>::max() &&
+//                    end_path_cost == std::numeric_limits<int>::max()) {
+//                    continue;
+//                }
+//
+//                // Create a modified cluster with the correct task order
+//                TaskCluster modified_cluster = cluster;
+//                int path_cost;
+//                
+//                if (start_path_cost <= end_path_cost) {
+//                    // Use original order (start -> end)
+//                    path_cost = start_path_cost;
+//                } else {
+//                    // Reverse the task order (end -> start)
+//                    path_cost = end_path_cost;
+//                    std::reverse(modified_cluster.task_ids.begin(), modified_cluster.task_ids.end());
+//                    modified_cluster.start_pos = cluster.end_pos;
+//                    modified_cluster.end_pos = cluster.start_pos;
+//                    modified_cluster.start_task_id = cluster.end_task_id;
+//                    modified_cluster.end_task_id = cluster.start_task_id;
+//                }
+//                
+//                // Calculate total cost including cluster's internal cost
+//                int total_cost;
+//                if (path_cost > std::numeric_limits<int>::max() - modified_cluster.total_cost) {
+//                    // Overflow would occur, skip this assignment
+//                    continue;
+//                }
+//                total_cost = path_cost + modified_cluster.total_cost;
+//
+//                // Skip if insufficient energy
+//                int required_energy = total_cost*1.05;
+//                if(cluster.task_ids.size()>=3) required_energy = total_cost*1.1;
+//                if (robot->get_energy() < required_energy) {
+//                    continue;
+//                }
+//
+//                // Calculate completion time
+//                int completion_time = calculateTaskCompletionTime(robot->id, 
+//                                                                  modified_cluster.start_task_id,
+//                                                               active_tasks,
+//                                                               known_cost_map,
+//                                                               known_object_map,
+//                                                               robots);
+//
+//                // Skip if completion time is infinite
+//                if (completion_time == std::numeric_limits<int>::max()) continue;
+//
+//                std::cout << "  Robot " << robot->id << " (" << robot->type << ") at " << robot_pos
+//                         << ": path cost = " << path_cost
+//                         << ", cluster cost = " << modified_cluster.total_cost
+//                         << ", total = " << total_cost
+//                         << ", completion time = " << completion_time << std::endl;
+//
+//                
+//                // If this is a better completion time
+//                if (completion_time < min_completion_time) {
+//                    min_completion_time = completion_time;
+//                    best_cluster_idx = cluster_idx;
+//                    best_robot_id = robot->id;
+//                    // Store the modified cluster for later use
+//                    task_clusters[cluster_idx] = modified_cluster;
+//                    std::cout << "  -> New best assignment found!" << std::endl;
+//                }
+//            }
+//        }
+//
+//        if (best_cluster_idx == -1) {
+//            std::cout << "\nNo assignable cluster found in this iteration. Splitting remaining unassigned clusters." << std::endl;
+//
+//            // 현재 unassigned_clusters에 있는 인덱스들을 임시 저장
+//            std::vector<int> clusters_to_split_indices;
+//            for(int cluster_idx : unassigned_clusters) {
+//                clusters_to_split_indices.push_back(cluster_idx);
+//            }
+//
+//            unassigned_clusters.clear(); // 현재 unassigned 목록을 비우고 새로 추가될 단일 태스크 클러스터로 채울 준비
+//
+//            for(int original_cluster_idx : clusters_to_split_indices) {
+//                const TaskCluster& cluster_to_split = task_clusters[original_cluster_idx];
+//                 std::cout << "  Splitting Cluster " << cluster_to_split.task_ids[0] << "... (size " << cluster_to_split.task_ids.size() << ")" << std::endl;
+//                
+//                for(int task_id : cluster_to_split.task_ids) {
+//                    TaskCluster single_task_cluster;
+//                    single_task_cluster.task_ids.push_back(task_id);
+//                    single_task_cluster.start_task_id = task_id;
+//                    single_task_cluster.end_task_id = task_id;
+//                    
+//                    // 태스크 좌표 찾기
+//                    Coord task_coord;
+//                    for (const auto& task : active_tasks) {
+//                        if (task->id == task_id) {
+//                            task_coord = task->coord;
+//                            break;
+//                        }
+//                    }
+//                    single_task_cluster.start_pos = task_coord;
+//                    single_task_cluster.end_pos = task_coord;
+//                    
+//                    // 단일 태스크 클러스터의 총 비용은 해당 태스크의 최대 실행 비용
+//                    int wheel_task_cost = std::numeric_limits<int>::max();
+//                    int caterpillar_task_cost = std::numeric_limits<int>::max();
+//                    for (const auto& task : active_tasks) {
+//                        if (task->id == task_id) {
+//                             wheel_task_cost = task->get_cost(ROBOT::TYPE::WHEEL);
+//                             caterpillar_task_cost = task->get_cost(ROBOT::TYPE::CATERPILLAR);
+//                            break;
+//                        }
+//                    }
+//                    single_task_cluster.total_cost = std::max(wheel_task_cost, caterpillar_task_cost);
+//
+//                    // 분리된 단일 태스크를 새로운 클러스터 목록에 추가
+//                    task_clusters.push_back(single_task_cluster);
+//                    // 새로 추가된 클러스터의 인덱스를 unassigned 목록에 넣음
+//                    unassigned_clusters.insert(task_clusters.size() - 1);
+//                     std::cout << "    -> Created single task cluster for Task " << task_id << " (new index: " << task_clusters.size() - 1 << ")" << std::endl;
+//                }
+//                 // 분리된 원본 클러스터는 더 이상 고려하지 않음 (unassigned_cluster_indices에서 이미 비웠으므로)
+//            }
+//            break;
+//            // 모든 불가능 클러스터를 분리했으므로, 다음 반복에서 분리된 단일 태스크 클러스터들을 대상으로 할당 재시도
+//        }
+//
+//        const TaskCluster& best_cluster = task_clusters[best_cluster_idx];
+//        std::cout << "\nAssigning Cluster " << best_cluster_idx << " to Robot " << best_robot_id
+//                 << " (completion time: " << min_completion_time << ")" << std::endl;
+//
+//        // Assign all tasks in the cluster to the robot
+//        for (int task_id : best_cluster.task_ids) {
+//            robotTaskQueue[best_robot_id].push(task_id);
+//        }
+//        robotToTask[best_robot_id] = best_cluster.start_task_id;
+//        robotCurrentTaskEndTime[best_robot_id] = min_completion_time;
+//
+//        // Update robot's expected position to the end position of the cluster
+//        updateRobotPosition(best_robot_id, best_cluster.end_pos);
+//        std::cout << "  Updated Robot " << best_robot_id << "'s expected position to " << best_cluster.end_pos << std::endl;
+//
+//        unassigned_clusters.erase(best_cluster_idx);
+//    }
+//     std::cout << "\nMin-Min Assignment finished." << std::endl;
+//}
 
 void Scheduler::performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robots,
                                          const vector<shared_ptr<TASK>>& active_tasks,

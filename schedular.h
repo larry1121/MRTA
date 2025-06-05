@@ -7,6 +7,7 @@
 #include <map>
 #include <limits> // For std::numeric_limits
 #include <algorithm> // For std::reverse, std::min
+#include <unordered_map>
 
 // Algorithm selection macros
 #define USE_MINMIN
@@ -88,6 +89,19 @@ private:
     // Teammate's structure for assignment: Robot_id -> Task_id
     std::map<int, int> robotToTask;
 
+    std::unordered_map<long long, int> pair_dist_cache; // key = (min<<32)|max
+
+    std::set<int> unassignable_clusters;
+
+
+    // schedular.h 내부 (private:)
+    std::set<int> dormant_task_ids;        // N tick 동안 제외
+    std::map<int, int> task_dormant_until;  // taskId → 재시도 tick
+    const int DORMANT_TTL = 200;           // 200 tick 뒤 재시도
+
+    unsigned long long tick_counter = 0;
+
+
     bool initial_map_revealed_and_assigned = false;
 
     // New variables to track when reassignment is needed
@@ -105,6 +119,26 @@ private:
     void checkForCompletedTasks(const vector<shared_ptr<TASK>>& active_tasks);
     void checkForExhaustedRobots(const vector<shared_ptr<ROBOT>>& robots);
     void checkForMapChanges(const set<Coord>& updated_coords);
+
+    // ---------- 새 helper ----------
+    int  getPairDistance(int tid1, int tid2,
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const shared_ptr<ROBOT>& wheel_robot,
+        const shared_ptr<ROBOT>& cater_robot,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
+    void splitClusterAdaptive(int cluster_idx,
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<shared_ptr<ROBOT>>& robots,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
+    void optimizeRobotSlack(const vector<shared_ptr<ROBOT>>& robots,
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
 
     // Helper to convert action to coordinate change
     Coord action_to_delta(ROBOT::ACTION action) {
