@@ -3,6 +3,11 @@
 #include <set>     // For std::set in priority queue for Dijkstra (custom comparator)
 #include <iostream> // Required for std::cout in print_task_total_costs_table
 #include <iomanip>  // Required for std::setw in print_task_total_costs_table
+#include <limits>
+#include <queue>
+#include <algorithm>
+#include <tuple>
+#include <cmath>
 
 // Helper for Dijkstra:
 // Using std::map for dist and parent for simplicity with Coord keys.
@@ -207,6 +212,97 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
 {
     /*----- 틱 카운트 -----*/
     ++tick_counter_;
+
+    {
+        DRONE_init_tiles(known_object_map);
+        DRONE_update_tile_info(known_object_map);
+        DRONE_assigned_targets.clear();
+
+        /* 드론만 추려 ID 순 정렬 */
+        std::vector<std::shared_ptr<ROBOT>> drones;
+        for (const auto& r : robots) if (r->type == ROBOT::TYPE::DRONE) drones.push_back(r);
+        std::sort(drones.begin(), drones.end(),
+            [](const auto& a, const auto& b) { return a->id < b->id; });
+
+        for (const auto& dr_ptr : drones)
+        {
+            int rid = dr_ptr->id;
+            Coord pos = dr_ptr->get_coord();
+
+            /* 목표지 근방이면 유지 */
+            if (dr_ptr->get_status() == ROBOT::STATUS::MOVING &&
+                DRONE_drone_targets.count(rid) && !DRONE_drone_paths[rid].empty())
+            {
+                Coord tgt = DRONE_drone_targets[rid];
+                int manhattan = abs(pos.x - tgt.x) + abs(pos.y - tgt.y);
+                if (manhattan > DRONE_distance_threshold) {
+                    DRONE_assigned_targets.insert({ tgt.x,tgt.y });
+                    continue;
+                }
+            }
+
+            /* 가장 높은 스코어 타일 탐색 */
+            double best_score = -1e9;
+            Coord  best_center = pos;
+            std::vector<Coord> best_path;
+
+            std::vector<std::tuple<double, int, int>> cand;
+            for (int i = 0;i < DRONE_tile_rows;++i)
+                for (int j = 0;j < DRONE_tile_cols;++j) {
+                    if (DRONE_tiles[i][j].unseen_cells == 0) continue;
+                    Coord center = DRONE_tiles[i][j].center;
+                    if (DRONE_assigned_targets.count({ center.x,center.y })) continue;
+                    if (known_object_map[center.x][center.y] == OBJECT::WALL) continue;
+
+                    double dist = abs(pos.x - center.x) + abs(pos.y - center.y);
+                    double score = double(DRONE_tiles[i][j].unseen_cells) / (dist + 1);
+                    if (DRONE_tiles[i][j].unseen_cells > DRONE_tile_size * DRONE_tile_size * 0.7)
+                        score *= DRONE_high_priority_weight;
+                    else if (DRONE_tiles[i][j].unseen_cells > DRONE_tile_size * DRONE_tile_size * 0.4)
+                        score *= DRONE_mid_priority_weight;
+
+                    cand.emplace_back(score, i, j);
+                }
+
+            /* 재탐색 후보가 없고 pause 종료전이라면 그대로 HOLD */
+            if (cand.empty() && DRONE_is_exploration_time() == false) {
+                DRONE_drone_paths[rid].clear();
+                DRONE_drone_targets[rid] = pos;
+                continue;
+            }
+
+            std::sort(cand.begin(), cand.end(),
+                [](auto& a, auto& b) { return std::get<0>(a) > std::get<0>(b); });
+
+            for (const auto& t : cand) {
+                if (std::get<0>(t) <= best_score * DRONE_candidate_threshold) break;
+                int i = std::get<1>(t), j = std::get<2>(t);
+                Coord center = DRONE_tiles[i][j].center;
+                auto path = DRONE_plan_path(pos, center, known_cost_map, *dr_ptr, known_object_map);
+                if (path.empty()) continue;
+                double final_score = double(DRONE_tiles[i][j].unseen_cells + 1) / (path.size() + 1);
+                if (final_score > best_score) {
+                    best_score = final_score;
+                    best_center = center;
+                    best_path = path;
+                }
+            }
+            if (best_path.empty() && known_object_map[pos.x][pos.y] == OBJECT::UNKNOWN) {
+                best_path.push_back(pos);
+                best_center = pos;
+            }
+
+            if (!best_path.empty()) {
+                DRONE_drone_paths[rid] = std::deque<Coord>(best_path.begin(), best_path.end());
+                DRONE_drone_targets[rid] = best_center;
+                DRONE_assigned_targets.insert({ best_center.x,best_center.y });
+            }
+            else {
+                DRONE_drone_paths[rid].clear();
+                DRONE_drone_targets[rid] = pos;
+            }
+        }
+    } /* ──── 드론 로직 끝 ──── */
 
     /*----- 100틱 체크 -----*/
     if (!has_started_assignments && tick_counter_ >= 100)
@@ -516,6 +612,21 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
                                      const vector<shared_ptr<ROBOT>> &robots,
                                      const ROBOT &robot)
 {
+    if (robot.type == ROBOT::TYPE::DRONE) {
+        if (!DRONE_is_exploration_time()) return ROBOT::ACTION::HOLD;
+        int rid = robot.id; Coord pos = robot.get_coord();
+        if (DRONE_drone_paths.count(rid) && !DRONE_drone_paths[rid].empty()) {
+            if (DRONE_coord_equal(pos, DRONE_drone_paths[rid].front()))
+                DRONE_drone_paths[rid].pop_front();
+            if (!DRONE_drone_paths[rid].empty()) {
+                Coord nxt = DRONE_drone_paths[rid].front();
+                if (known_object_map[nxt.x][nxt.y] == OBJECT::WALL) return ROBOT::ACTION::HOLD;
+                return DRONE_get_direction(pos, nxt);
+            }
+        }
+        return ROBOT::ACTION::HOLD;
+    }
+
     if (robot.get_status() != ROBOT::STATUS::IDLE) {
         return ROBOT::ACTION::HOLD;
     }
@@ -2152,3 +2263,109 @@ int Scheduler::calculatePathCost(const Coord& start, const Coord& end,
                    path_actions, path_coords);
 }
 
+
+
+
+
+
+
+bool Scheduler::DRONE_coord_equal(const Coord& a, const Coord& b) { return a.x == b.x && a.y == b.y; }
+
+void Scheduler::DRONE_init_tiles(const std::vector<std::vector<OBJECT>>& known_object_map)
+{
+    if (DRONE_map_size != -1) return;
+    DRONE_map_size = static_cast<int>(known_object_map.size());
+    DRONE_tile_rows = (DRONE_map_size + DRONE_tile_size - 1) / DRONE_tile_size;
+    DRONE_tile_cols = DRONE_tile_rows;
+    DRONE_tiles.assign(DRONE_tile_rows, std::vector<DRONE_TileInfo>(DRONE_tile_cols));
+
+    for (int i = 0;i < DRONE_tile_rows;++i) {
+        for (int j = 0;j < DRONE_tile_cols;++j) {
+            int cx = j * DRONE_tile_size + DRONE_tile_range;
+            int cy = i * DRONE_tile_size + DRONE_tile_range;
+            cx = std::min(cx, DRONE_map_size - 1);
+            cy = std::min(cy, DRONE_map_size - 1);
+            if (known_object_map[cx][cy] == OBJECT::WALL) {
+                bool found = false;
+                for (int d = 1;d <= DRONE_tile_range + 1 && !found;++d) {
+                    for (int dx = -d;dx <= d && !found;++dx)
+                        for (int dy = -d;dy <= d && !found;++dy) {
+                            int nx = cx + dx, ny = cy + dy;
+                            if (nx >= 0 && nx < DRONE_map_size && ny >= 0 && ny < DRONE_map_size &&
+                                known_object_map[nx][ny] != OBJECT::WALL) {
+                                cx = nx; cy = ny; found = true;
+                            }
+                        }
+                }
+            }
+            DRONE_tiles[i][j].center = Coord(cx, cy);
+        }
+    }
+}
+void Scheduler::DRONE_update_tile_info(const std::vector<std::vector<OBJECT>>& known_object_map)
+{
+    for (int i = 0;i < DRONE_tile_rows;++i) {
+        for (int j = 0;j < DRONE_tile_cols;++j) {
+            int ux = DRONE_tiles[i][j].center.x - DRONE_tile_range;
+            int uy = DRONE_tiles[i][j].center.y - DRONE_tile_range;
+            int unseen = 0;
+            for (int dx = 0;dx < DRONE_tile_size;++dx)
+                for (int dy = 0;dy < DRONE_tile_size;++dy) {
+                    int x = ux + dx, y = uy + dy;
+                    if (x >= 0 && x < DRONE_map_size && y >= 0 && y < DRONE_map_size &&
+                        known_object_map[x][y] == OBJECT::UNKNOWN) unseen++;
+                }
+            DRONE_tiles[i][j].unseen_cells = unseen;
+        }
+    }
+}
+
+std::vector<Coord> Scheduler::DRONE_plan_path(const Coord& start, const Coord& goal,
+    const std::vector<std::vector<std::vector<int>>>& known_cost_map,
+    const ROBOT& robot,
+    const std::vector<std::vector<OBJECT>>& known_object_map)
+{
+    if (robot.type == ROBOT::TYPE::DRONE) {
+        std::vector<std::vector<bool>> vis(DRONE_map_size, std::vector<bool>(DRONE_map_size, false));
+        std::vector<std::vector<Coord>> prev(DRONE_map_size, std::vector<Coord>(DRONE_map_size, Coord(-1, -1)));
+        std::queue<Coord> q; vis[start.x][start.y] = true; q.push(start);
+        static const int dx[4] = { 0,0,-1,1 }, dy[4] = { 1,-1,0,0 };
+        while (!q.empty()) {
+            Coord cur = q.front(); q.pop();
+            if (DRONE_coord_equal(cur, goal)) break;
+            for (int d = 0;d < 4;++d) {
+                int nx = cur.x + dx[d], ny = cur.y + dy[d];
+                if (nx < 0 || ny < 0 || nx >= DRONE_map_size || ny >= DRONE_map_size) continue;
+                if (known_object_map[nx][ny] == OBJECT::WALL) continue;
+                if (vis[nx][ny]) continue;
+                vis[nx][ny] = true; prev[nx][ny] = cur; q.push(Coord(nx, ny));
+            }
+        }
+        std::vector<Coord> path; Coord p = goal;
+        if (prev[p.x][p.y].x == -1 && !DRONE_coord_equal(start, goal)) return path;
+        while (!DRONE_coord_equal(p, start)) { path.push_back(p); p = prev[p.x][p.y]; }
+        std::reverse(path.begin(), path.end()); return path;
+    }
+    /* ground 로봇일 경우 기존 dijkstra 호출 */
+    std::vector<ROBOT::ACTION> tmpA; std::vector<Coord> tmpC;
+
+    int cost = dijkstra(start, goal, robot, 0, known_cost_map, known_object_map,
+        static_cast<int>(known_cost_map.size()), tmpA, tmpC);
+    if (cost == std::numeric_limits<int>::max()) return {};
+    return tmpC;   // coordinates 포함 - 첫 항이 start 이므로 pop_front 필요
+}
+
+ROBOT::ACTION Scheduler::DRONE_get_direction(const Coord& from, const Coord& to)
+{
+    int dx = to.x - from.x, dy = to.y - from.y;
+    if (dx == 0 && dy == 1)  return ROBOT::ACTION::UP;
+    if (dx == 0 && dy == -1) return ROBOT::ACTION::DOWN;
+    if (dx == -1 && dy == 0)  return ROBOT::ACTION::LEFT;
+    if (dx == 1 && dy == 0)  return ROBOT::ACTION::RIGHT;
+    return ROBOT::ACTION::HOLD;
+}
+bool Scheduler::DRONE_is_exploration_time() const
+{
+    return (tick_counter_ < DRONE_exploration_pause_start) ||
+        (tick_counter_ >= DRONE_exploration_resume);
+}

@@ -5,8 +5,14 @@
 #include <vector>
 #include <queue>
 #include <map>
-#include <limits> // For std::numeric_limits
-#include <algorithm> // For std::reverse, std::min
+#include <set>
+#include <deque>
+#include <unordered_map>
+#include <tuple>
+#include <limits>
+#include <algorithm>
+#include <functional>
+#include <iomanip>
 
 // Algorithm selection macros
 #define USE_MINMIN
@@ -43,29 +49,29 @@ struct TaskCluster {
 class Scheduler
 {
 public:
-    void on_info_updated(const set<Coord> &observed_coords,
-                         const set<Coord> &updated_coords,
-                         const vector<vector<vector<int>>> &known_cost_map,
-                         const vector<vector<OBJECT>> &known_object_map,
-                         const vector<shared_ptr<TASK>> &active_tasks,
-                         const vector<shared_ptr<ROBOT>> &robots);
+    void on_info_updated(const set<Coord>& observed_coords,
+        const set<Coord>& updated_coords,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map,
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<shared_ptr<ROBOT>>& robots);
 
-    bool on_task_reached(const set<Coord> &observed_coords,
-                         const set<Coord> &updated_coords,
-                         const vector<vector<vector<int>>> &known_cost_map,
-                         const vector<vector<OBJECT>> &known_object_map,
-                         const vector<shared_ptr<TASK>> &active_tasks,
-                         const vector<shared_ptr<ROBOT>> &robots,
-                         const ROBOT &robot,
-                         const TASK &task);
+    bool on_task_reached(const set<Coord>& observed_coords,
+        const set<Coord>& updated_coords,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map,
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<shared_ptr<ROBOT>>& robots,
+        const ROBOT& robot,
+        const TASK& task);
 
-    ROBOT::ACTION idle_action(const set<Coord> &observed_coords,
-                              const set<Coord> &updated_coords,
-                              const vector<vector<vector<int>>> &known_cost_map,
-                              const vector<vector<OBJECT>> &known_object_map,
-                              const vector<shared_ptr<TASK>> &active_tasks,
-                              const vector<shared_ptr<ROBOT>> &robots,
-                              const ROBOT &robot);
+    ROBOT::ACTION idle_action(const set<Coord>& observed_coords,
+        const set<Coord>& updated_coords,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map,
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<shared_ptr<ROBOT>>& robots,
+        const ROBOT& robot);
     Scheduler();
 
 private:
@@ -82,7 +88,7 @@ private:
 
     // Robot_id -> task_id -> total_cost (path_cost + task_execution_cost)
     std::map<int, std::map<int, int>> task_total_costs;
-    
+
     // Robot_id -> current target task_id (if any)
     std::map<int, int> robot_target_task_id;
 
@@ -101,44 +107,81 @@ private:
     std::set<int> newly_completed_tasks;
     std::set<int> newly_exhausted_robots;
 
+
+    /* ---------- DRONE(맵 탐사) ---------- */
+    struct DRONE_TileInfo { Coord center; int unseen_cells = 0; };
+
+    int    DRONE_tile_size = 5;
+    int    DRONE_tile_range = 2;
+
+    int    DRONE_map_size = -1;
+    int    DRONE_tile_rows = 0;
+    int    DRONE_tile_cols = 0;
+
+    std::vector<std::vector<DRONE_TileInfo>> DRONE_tiles;
+    std::unordered_map<int, std::deque<Coord>> DRONE_drone_paths;
+    std::unordered_map<int, Coord>             DRONE_drone_targets;
+    std::set<std::pair<int, int>>               DRONE_assigned_targets;
+
+    /*   드론-최적화 파라미터   */
+    int    DRONE_distance_threshold = 0;
+    double DRONE_high_priority_weight = 80.0;
+    double DRONE_mid_priority_weight = 60.0;
+    double DRONE_candidate_threshold = 0.005;
+    int    DRONE_exploration_pause_start = 100;
+    int    DRONE_exploration_resume = 950;
+
     // Helper methods for task assignment triggers
     bool shouldTriggerReassignment(const set<Coord>& updated_coords,
-                                 const vector<shared_ptr<TASK>>& active_tasks,
-                                 const vector<shared_ptr<ROBOT>>& robots) const;
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<shared_ptr<ROBOT>>& robots) const;
     void checkForNewTasks(const vector<shared_ptr<TASK>>& active_tasks);
     void checkForCompletedTasks(const vector<shared_ptr<TASK>>& active_tasks);
     void checkForExhaustedRobots(const vector<shared_ptr<ROBOT>>& robots);
     void checkForMapChanges(const set<Coord>& updated_coords);
 
+    /* ─────── DRONE helper ─────── */
+    /* 이름 충돌 방지를 위해 모두 DRONE_ 접두사 */
+    static bool DRONE_coord_equal(const Coord&, const Coord&);
+    void  DRONE_init_tiles(const std::vector<std::vector<OBJECT>>&);
+    void  DRONE_update_tile_info(const std::vector<std::vector<OBJECT>>&);
+    std::vector<Coord> DRONE_plan_path(const Coord&, const Coord&,
+        const std::vector<std::vector<std::vector<int>>>&,
+        const ROBOT&,
+        const std::vector<std::vector<OBJECT>>&);
+
+    ROBOT::ACTION DRONE_get_direction(const Coord&, const Coord&);
+    bool  DRONE_is_exploration_time() const;
+
     // Helper to convert action to coordinate change
     Coord action_to_delta(ROBOT::ACTION action) {
         switch (action) {
-            case ROBOT::ACTION::UP:    return {0, 1};
-            case ROBOT::ACTION::DOWN:  return {0, -1};
-            case ROBOT::ACTION::LEFT:  return {-1, 0};
-            case ROBOT::ACTION::RIGHT: return {1, 0};
-            case ROBOT::ACTION::HOLD:  return {0, 0};
-            default:                   return {0, 0}; // Should not happen
+        case ROBOT::ACTION::UP:    return { 0, 1 };
+        case ROBOT::ACTION::DOWN:  return { 0, -1 };
+        case ROBOT::ACTION::LEFT:  return { -1, 0 };
+        case ROBOT::ACTION::RIGHT: return { 1, 0 };
+        case ROBOT::ACTION::HOLD:  return { 0, 0 };
+        default:                   return { 0, 0 }; // Should not happen
         }
     }
 
     // Dijkstra pathfinding algorithm
     int dijkstra(const Coord& start,
-                 const Coord& goal,
-                 const ROBOT& robot,
-                 const int task_cost_for_robot,
-                 const vector<vector<vector<int>>>& known_cost_map,
-                 const vector<vector<OBJECT>>& known_object_map,
-                 int map_size,
-                 std::vector<ROBOT::ACTION>& out_path_actions,
-                 std::vector<Coord>& out_path_coords);
+        const Coord& goal,
+        const ROBOT& robot,
+        const int task_cost_for_robot,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map,
+        int map_size,
+        std::vector<ROBOT::ACTION>& out_path_actions,
+        std::vector<Coord>& out_path_coords);
 
     // Task assignment logic
     void performMinMinAssignment(const vector<shared_ptr<TASK>>& active_tasks,
-                               const vector<shared_ptr<ROBOT>>& robots,
-                               const vector<vector<vector<int>>>& known_cost_map,
-                               const vector<vector<OBJECT>>& known_object_map);
-    
+        const vector<shared_ptr<ROBOT>>& robots,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
     // Helper to check if map is fully revealed
     bool is_map_fully_revealed(const vector<vector<OBJECT>>& known_object_map) const;
 
@@ -149,9 +192,10 @@ private:
         int completionTime;
         int pathCost;
         int taskCost;
-        
+
         TaskAssignmentInfo(int tid, int rid, int ct, int pc, int tc)
-            : taskId(tid), robotId(rid), completionTime(ct), pathCost(pc), taskCost(tc) {}
+            : taskId(tid), robotId(rid), completionTime(ct), pathCost(pc), taskCost(tc) {
+        }
     };
 
     // Robot task queue management
@@ -162,32 +206,32 @@ private:
     // Helper methods
     void updateRobotPosition(int robotId, const Coord& newPosition);
     void recalculateCostsForRobot(int robotId,
-                                 const vector<shared_ptr<ROBOT>>& robots,
-                                 const vector<shared_ptr<TASK>>& active_tasks,
-                                 const vector<vector<vector<int>>>& known_cost_map,
-                                 const vector<vector<OBJECT>>& known_object_map);
-    
+        const vector<shared_ptr<ROBOT>>& robots,
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
     int calculateTaskCompletionTime(int robotId, int taskId,
-                                  const vector<shared_ptr<TASK>>& active_tasks,
-                                  const vector<vector<vector<int>>>& known_cost_map,
-                                  const vector<vector<OBJECT>>& known_object_map,
-                                  const vector<shared_ptr<ROBOT>>& robots);
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map,
+        const vector<shared_ptr<ROBOT>>& robots);
 
     bool isTaskAlreadyAssigned(int taskId) const;
 
     void perform_task_assignment(const vector<shared_ptr<ROBOT>>& robots,
-                               const vector<shared_ptr<TASK>>& active_tasks,
-                               const vector<vector<OBJECT>>& known_object_map);
-    
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<vector<OBJECT>>& known_object_map);
+
     void performSufferageAssignment(const vector<shared_ptr<ROBOT>>& robots,
-                                  const vector<shared_ptr<TASK>>& active_tasks,
-                                  const vector<vector<vector<int>>>& known_cost_map,
-                                  const vector<vector<OBJECT>>& known_object_map);
-    
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
     void performOLBAssignment(const vector<shared_ptr<ROBOT>>& robots,
-                            const vector<shared_ptr<TASK>>& active_tasks,
-                            const vector<vector<vector<int>>>& known_cost_map,
-                            const vector<vector<OBJECT>>& known_object_map);
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
 
     // Path cache structures
     struct TaskPathInfo {
@@ -199,9 +243,10 @@ private:
 
         TaskPathInfo() : path_cost(std::numeric_limits<int>::max()), task_cost(std::numeric_limits<int>::max()) {}
         TaskPathInfo(const std::vector<ROBOT::ACTION>& acts,
-                    const std::vector<Coord>& coords,
-                    int pc, int tc, const Coord& tcrd)
-            : actions(acts), coordinates(coords), path_cost(pc), task_cost(tc), task_coord(tcrd) {}
+            const std::vector<Coord>& coords,
+            int pc, int tc, const Coord& tcrd)
+            : actions(acts), coordinates(coords), path_cost(pc), task_cost(tc), task_coord(tcrd) {
+        }
     };
 
     // Robot_id -> queue of TaskPathInfo for each task in the robot's queue
@@ -209,11 +254,11 @@ private:
 
     // Helper methods for path cache
     void updatePathCache(int robot_id,
-                        const std::vector<shared_ptr<TASK>>& active_tasks,
-                        const vector<vector<vector<int>>>& known_cost_map,
-                        const vector<vector<OBJECT>>& known_object_map,
-                        const vector<shared_ptr<ROBOT>>& robots);
-    
+        const std::vector<shared_ptr<TASK>>& active_tasks,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map,
+        const vector<shared_ptr<ROBOT>>& robots);
+
     void clearPathCache(int robot_id);
     bool isPathCacheValid(int robot_id, const Coord& current_pos) const;
 
@@ -222,25 +267,41 @@ private:
 
     // Add new private methods
     void clusterTasks(const vector<shared_ptr<TASK>>& active_tasks,
-                     const vector<shared_ptr<ROBOT>>& robots,
-                     const vector<vector<vector<int>>>& known_cost_map,
-                     const vector<vector<OBJECT>>& known_object_map);
-    
+        const vector<shared_ptr<ROBOT>>& robots,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
     void findClusterEndpoints(TaskCluster& cluster,
-                            const vector<shared_ptr<TASK>>& active_tasks,
-                            const vector<shared_ptr<ROBOT>>& robots,
-                            const vector<vector<vector<int>>>& known_cost_map,
-                            const vector<vector<OBJECT>>& known_object_map);
-    
+        const vector<shared_ptr<TASK>>& active_tasks,
+        const vector<shared_ptr<ROBOT>>& robots,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
+
     int calculatePathCost(const Coord& start, const Coord& end,
-                         const ROBOT& robot,
-                         const vector<vector<vector<int>>>& known_cost_map,
-                         const vector<vector<OBJECT>>& known_object_map);
+        const ROBOT& robot,
+        const vector<vector<vector<int>>>& known_cost_map,
+        const vector<vector<OBJECT>>& known_object_map);
 
 public:
+
+    //void set_tile_parameters(int size, int range) { DRONE_tile_size = size; DRONE_tile_range = range; }
+    //void set_optimization_parameters(int dist, bool high, double mid, double cand, int pause, int resume)
+    //{
+    //    DRONE_distance_threshold = dist; DRONE_high_priority_weight = high; DRONE_mid_priority_weight = mid;
+    //    DRONE_candidate_threshold = cand; DRONE_exploration_pause_start = pause; DRONE_exploration_resume = resume;
+    //}
+
+    ///* ------------- static util ------------- */
+    //static inline int calculate_move_cost(const Coord&, const Coord&, ROBOT::TYPE,
+    //    const std::vector<std::vector<std::vector<int>>>&);
+
+    ///* 디버깅용 출력 */
+    //void print_robot_task_queues(const std::vector<std::shared_ptr<ROBOT>>&,
+    //    const std::vector<std::shared_ptr<TASK>>&) const;
+
     // Static helper function for move cost
     static inline int calculate_move_cost(const Coord& c1, const Coord& c2, ROBOT::TYPE r_type,
-                                 const vector<vector<vector<int>>>& cost_map)
+        const vector<vector<vector<int>>>& cost_map)
     {
         if (c1 == c2) return 0; // No cost if not moving
 
@@ -253,7 +314,7 @@ public:
         }
         return (cost1 + cost2) / 2;
     }
-    
+
     // Method to print the task_total_costs table
     void print_task_total_costs_table(const vector<shared_ptr<ROBOT>>& all_robots, const vector<shared_ptr<TASK>>& all_tasks) const;
 
@@ -270,7 +331,7 @@ public:
                     if (!first) std::cout << " -> ";
                     int task_id = temp_queue.front();
                     temp_queue.pop();
-                    
+
                     // Find task coordinates
                     Coord task_coord;
                     for (const auto& task : active_tasks) {
@@ -279,12 +340,13 @@ public:
                             break;
                         }
                     }
-                    
+
                     std::cout << "Task " << task_id << " at " << task_coord;
                     first = false;
                 }
                 std::cout << "]";
-            } else {
+            }
+            else {
                 std::cout << "No tasks in queue";
             }
             std::cout << " | Current Position: " << robot->get_coord();

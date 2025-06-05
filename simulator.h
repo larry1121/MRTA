@@ -197,7 +197,7 @@ public:
     static constexpr int NUM_ROBOT_TYPE = 3;
     static constexpr int ROBOT_ENERGY_PER_TICK = 10;
     static constexpr int TASK_PROGRESS_PER_TICK = ROBOT_ENERGY_PER_TICK;
-    static constexpr int view_range_list[] = {20, 1, 1};
+    static constexpr int view_range_list[] = {2, 1, 1};
     static constexpr VIEWTYPE view_type_list[] = {VIEWTYPE::SQUARE, VIEWTYPE::SQUARE, VIEWTYPE::CROSS}; // 1: cross range, 2: square range
     static constexpr int energy_per_tick_list[] = {ROBOT_ENERGY_PER_TICK, ROBOT_ENERGY_PER_TICK, ROBOT_ENERGY_PER_TICK};
 
