@@ -282,6 +282,39 @@ private:
         const vector<vector<vector<int>>>& known_cost_map,
         const vector<vector<OBJECT>>& known_object_map);
 
+    static constexpr int UNKNOWN_COST_CATERPILLAR = 398;
+    static constexpr int UNKNOWN_COST_WHEEL = 846;
+
+    // 변하지 않는 helper
+    static inline int default_unknown_cost(ROBOT::TYPE t)
+    {
+        switch (t)
+        {
+        case ROBOT::TYPE::CATERPILLAR: return UNKNOWN_COST_CATERPILLAR;
+        case ROBOT::TYPE::WHEEL:       return UNKNOWN_COST_WHEEL;
+        default:                       return INFINITE / 4; // 드론은 안 씀
+        }
+    }
+
+    // ★ 새 calculate_move_cost ★
+    static inline int calculate_move_cost(const Coord& c1, const Coord& c2,
+        ROBOT::TYPE r_type,
+        const vector<vector<vector<int>>>& cost_map)
+    {
+        if (c1 == c2) return 0;
+
+        const int idx = static_cast<int>(r_type);
+        int cost1 = cost_map[c1.x][c1.y][idx];
+        int cost2 = cost_map[c2.x][c2.y][idx];
+
+        //  -1 (=미탐색) 이면 각 타입의 ‘최대값’으로 대체
+        if (cost1 == -1) cost1 = default_unknown_cost(r_type);
+        if (cost2 == -1) cost2 = default_unknown_cost(r_type);
+
+        if (cost1 == INFINITE || cost2 == INFINITE) return INFINITE;
+        return (cost1 + cost2) / 2;
+    }
+
 public:
 
     //void set_tile_parameters(int size, int range) { DRONE_tile_size = size; DRONE_tile_range = range; }
@@ -300,20 +333,20 @@ public:
     //    const std::vector<std::shared_ptr<TASK>>&) const;
 
     // Static helper function for move cost
-    static inline int calculate_move_cost(const Coord& c1, const Coord& c2, ROBOT::TYPE r_type,
-        const vector<vector<vector<int>>>& cost_map)
-    {
-        if (c1 == c2) return 0; // No cost if not moving
+    //static inline int calculate_move_cost(const Coord& c1, const Coord& c2, ROBOT::TYPE r_type,
+    //    const vector<vector<vector<int>>>& cost_map)
+    //{
+    //    if (c1 == c2) return 0; // No cost if not moving
 
-        int type_idx = static_cast<int>(r_type);
-        int cost1 = cost_map[c1.x][c1.y][type_idx];
-        int cost2 = cost_map[c2.x][c2.y][type_idx];
+    //    int type_idx = static_cast<int>(r_type);
+    //    int cost1 = cost_map[c1.x][c1.y][type_idx];
+    //    int cost2 = cost_map[c2.x][c2.y][type_idx];
 
-        if (cost1 == INFINITE || cost2 == INFINITE) {
-            return INFINITE;
-        }
-        return (cost1 + cost2) / 2;
-    }
+    //    if (cost1 == INFINITE || cost2 == INFINITE) {
+    //        return INFINITE;
+    //    }
+    //    return (cost1 + cost2) / 2;
+    //}
 
     // Method to print the task_total_costs table
     void print_task_total_costs_table(const vector<shared_ptr<ROBOT>>& all_robots, const vector<shared_ptr<TASK>>& all_tasks) const;

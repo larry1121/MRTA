@@ -19,6 +19,7 @@
 
 set<Coord> now_coords;
 
+
 int Scheduler::dijkstra(const Coord& start,
                         const Coord& goal,
                         const ROBOT& robot,
@@ -107,11 +108,11 @@ int Scheduler::dijkstra(const Coord& start,
             if (known_object_map.at(next_coord.x).at(next_coord.y) == OBJECT::WALL) {
                 continue;
             }
-            size_t robot_type_idx = static_cast<size_t>(robot_type);
+            /*size_t robot_type_idx = static_cast<size_t>(robot_type);
             if (robot_type_idx >= known_cost_map.at(next_coord.x).at(next_coord.y).size() ||
                 known_cost_map.at(next_coord.x).at(next_coord.y).at(robot_type_idx) == -1 ) {
                 continue;
-            }
+            }*/
 
             int edge_cost = Scheduler::calculate_move_cost(current_coord_pq, next_coord, robot_type, known_cost_map);
 
@@ -119,7 +120,9 @@ int Scheduler::dijkstra(const Coord& start,
                 continue;
             }
             
+
             int new_cost = current_cost_pq + edge_cost;
+
             
             // Energy pruning conditions from problem statement
             if (task_cost_for_robot != INFINITE) { // Only prune if task_cost is known (not for pure pathfinding)
