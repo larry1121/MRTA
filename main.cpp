@@ -26,6 +26,7 @@ int main()
     constexpr int WALL_DENSITY = 20;
     constexpr int TIME_MAX = MAP_SIZE * 100;
     constexpr int ROBOT_ENERGY = TIME_MAX * 6;
+    constexpr int NUM_RUNS_PER_PARAM = 5;
 
     std::vector<Hyperparameters> param_sets;
     std::vector<int> cluster_dists = {1200, 1400, 1600};
@@ -58,110 +59,119 @@ int main()
     std::string filename = "results_" + ss.str() + ".csv";
 
     std::ofstream results_file(filename);
-    results_file << "ClusterDist,EnergyMargin,MaxClusterSize,DronePause,DroneResume,CompletedTasks\n";
+    results_file << "ClusterDist,EnergyMargin,MaxClusterSize,DronePause,DroneResume,AvgCompletedTasks\n";
 
-    int best_completed_tasks = -1;
+    double best_avg_completed_tasks = -1.0;
     Hyperparameters best_params;
 
-    int run_count = 0;
+    int set_count = 0;
     for (const auto &params : param_sets)
     {
-        run_count++;
-        std::cout << "\n--- Running Simulation " << run_count << "/" << param_sets.size() << " ---\n";
+        set_count++;
+        std::cout << "\n--- Running Simulation Set " << set_count << "/" << param_sets.size() << " ---\n";
         std::cout << "Params: CD=" << params.cluster_dist << " EM=" << params.energy_margin
                   << " MCS=" << params.max_cluster_size << " DP=" << params.drone_pause
                   << " DR=" << params.drone_resume << std::endl;
 
-        srand(static_cast<unsigned int>(time(NULL)));
+        long long total_completed_tasks_for_param = 0;
 
-        TIMER timer;
-        MAP map(MAP_SIZE, NUM_ROBOT, NUM_INITIAL_TASKS, NUM_MAX_TASKS, WALL_DENSITY, ROBOT_ENERGY);
-        int time = -1;
-        auto &robots = map.get_robots();
-        auto &known_cost_map = map.get_known_cost_map();
-        auto &known_object_map = map.get_known_object_map();
-        auto &active_tasks = map.get_active_tasks();
-        Scheduler scheduler;
-        scheduler.set_hyperparameters(params.cluster_dist, params.energy_margin, params.max_cluster_size, params.drone_pause, params.drone_resume);
-        TASKDISPATCHER taskdispatcher(map, TIME_MAX);
-
-        set<Coord> observed_coords;
-        set<Coord> updated_coords;
-
-        while (++time < TIME_MAX &&
-               robots.size() != map.get_exhausted_robot_num() &&
-               map.num_total_task != map.get_completed_task_num())
+        for (int i = 0; i < NUM_RUNS_PER_PARAM; ++i)
         {
-            taskdispatcher.try_dispatch(time);
-            observed_coords = map.observed_coord_by_robot();
-            updated_coords = map.update_coords(observed_coords);
+            std::cout << "  Run " << i + 1 << "/" << NUM_RUNS_PER_PARAM << "...";
+            srand(static_cast<unsigned int>(time(NULL)) + set_count * 1000 + i);
 
-            scheduler.on_info_updated(observed_coords,
-                                      updated_coords,
-                                      known_cost_map,
-                                      known_object_map,
-                                      active_tasks,
-                                      robots);
+            MAP map(MAP_SIZE, NUM_ROBOT, NUM_INITIAL_TASKS, NUM_MAX_TASKS, WALL_DENSITY, ROBOT_ENERGY);
+            int time = -1;
+            auto &robots = map.get_robots();
+            auto &known_cost_map = map.get_known_cost_map();
+            auto &known_object_map = map.get_known_object_map();
+            auto &active_tasks = map.get_active_tasks();
+            Scheduler scheduler;
+            scheduler.set_hyperparameters(params.cluster_dist, params.energy_margin, params.max_cluster_size, params.drone_pause, params.drone_resume);
+            TASKDISPATCHER taskdispatcher(map, TIME_MAX);
 
-            for (auto robot : robots)
+            set<Coord> observed_coords;
+            set<Coord> updated_coords;
+
+            while (++time < TIME_MAX &&
+                   robots.size() != map.get_exhausted_robot_num() &&
+                   map.num_total_task != map.get_completed_task_num())
             {
-                auto &status = robot->get_status();
-                if (status == ROBOT::STATUS::IDLE)
+                taskdispatcher.try_dispatch(time);
+                observed_coords = map.observed_coord_by_robot();
+                updated_coords = map.update_coords(observed_coords);
+
+                scheduler.on_info_updated(observed_coords,
+                                          updated_coords,
+                                          known_cost_map,
+                                          known_object_map,
+                                          active_tasks,
+                                          robots);
+
+                for (auto robot : robots)
                 {
-                    auto coord = robot->get_coord();
-                    bool do_task = false;
-                    weak_ptr<TASK> task;
-                    if (bool(known_object_map[coord.x][coord.y] & OBJECT::TASK))
+                    auto &status = robot->get_status();
+                    if (status == ROBOT::STATUS::IDLE)
                     {
-                        task = map.task_at(coord);
-                        do_task = scheduler.on_task_reached(observed_coords,
-                                                            updated_coords,
-                                                            known_cost_map,
-                                                            known_object_map,
-                                                            active_tasks,
-                                                            robots,
-                                                            *robot,
-                                                            *(task.lock()));
+                        auto coord = robot->get_coord();
+                        bool do_task = false;
+                        weak_ptr<TASK> task;
+                        if (bool(known_object_map[coord.x][coord.y] & OBJECT::TASK))
+                        {
+                            task = map.task_at(coord);
+                            do_task = scheduler.on_task_reached(observed_coords,
+                                                                updated_coords,
+                                                                known_cost_map,
+                                                                known_object_map,
+                                                                active_tasks,
+                                                                robots,
+                                                                *robot,
+                                                                *(task.lock()));
+                        }
+
+                        if (do_task)
+                        {
+                            robot->start_working(task);
+                        }
+                        else
+                        {
+                            ROBOT::ACTION action = scheduler.idle_action(observed_coords,
+                                                                         updated_coords,
+                                                                         known_cost_map,
+                                                                         known_object_map,
+                                                                         active_tasks,
+                                                                         robots,
+                                                                         *robot);
+                            robot->start_moving(action);
+                        }
                     }
 
-                    if (do_task)
+                    if (status == ROBOT::STATUS::MOVING)
                     {
-                        robot->start_working(task);
+                        robot->move();
                     }
-                    else
+                    else if (status == ROBOT::STATUS::WORKING)
                     {
-                        ROBOT::ACTION action = scheduler.idle_action(observed_coords,
-                                                                     updated_coords,
-                                                                     known_cost_map,
-                                                                     known_object_map,
-                                                                     active_tasks,
-                                                                     robots,
-                                                                     *robot);
-                        robot->start_moving(action);
+                        robot->work();
                     }
-                }
-
-                if (status == ROBOT::STATUS::MOVING)
-                {
-                    robot->move();
-                }
-                else if (status == ROBOT::STATUS::WORKING)
-                {
-                    robot->work();
                 }
             }
+            int completed_tasks = map.get_completed_task_num();
+            total_completed_tasks_for_param += completed_tasks;
+            std::cout << " completed tasks: " << completed_tasks << std::endl;
         }
 
-        int completed_tasks = map.get_completed_task_num();
-        results_file << params.cluster_dist << "," << params.energy_margin << "," << params.max_cluster_size
-                     << "," << params.drone_pause << "," << params.drone_resume << "," << completed_tasks << "\n";
+        double avg_completed_tasks = static_cast<double>(total_completed_tasks_for_param) / NUM_RUNS_PER_PARAM;
 
-        if (completed_tasks > best_completed_tasks)
+        results_file << params.cluster_dist << "," << params.energy_margin << "," << params.max_cluster_size
+                     << "," << params.drone_pause << "," << params.drone_resume << "," << avg_completed_tasks << "\n";
+
+        if (avg_completed_tasks > best_avg_completed_tasks)
         {
-            best_completed_tasks = completed_tasks;
+            best_avg_completed_tasks = avg_completed_tasks;
             best_params = params;
         }
-        std::cout << "Run " << run_count << " finished. Completed tasks: " << completed_tasks << std::endl;
+        std::cout << "Average completed tasks for this set: " << avg_completed_tasks << std::endl;
     }
 
     results_file.close();
@@ -173,7 +183,7 @@ int main()
     cout << "Drone Exploration Pause Start: " << best_params.drone_pause << "\n";
     cout << "Drone Exploration Resume: " << best_params.drone_resume << "\n";
     cout << "------------------------------------------------------------\n";
-    cout << "Best Completed Tasks: " << best_completed_tasks << "\n";
+    cout << "Best Average Completed Tasks: " << best_avg_completed_tasks << "\n";
     cout << "=============================================================\n";
 
     return 0;
