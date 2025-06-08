@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <filesystem>
 
 struct Hyperparameters
 {
@@ -26,14 +27,14 @@ int main()
     constexpr int WALL_DENSITY = 20;
     constexpr int TIME_MAX = MAP_SIZE * 100;
     constexpr int ROBOT_ENERGY = TIME_MAX * 6;
-    constexpr int NUM_RUNS_PER_PARAM = 2;
+    constexpr int NUM_RUNS_PER_PARAM = 3;
 
     std::vector<Hyperparameters> param_sets;
-    std::vector<int> cluster_dists = {1200,1400,1600};
+    std::vector<int> cluster_dists = {1200, 1400, 1600};
     std::vector<int> energy_margins = {10};
-    std::vector<int> max_cluster_sizes = {3,4};
-    std::vector<int> drone_pauses = {100,200,300};
-    std::vector<int> drone_resumes = {550,650,750};
+    std::vector<int> max_cluster_sizes = {3, 4};
+    std::vector<int> drone_pauses = {100, 200, 300};
+    std::vector<int> drone_resumes = {550, 650, 750};
 
     for (int cd : cluster_dists)
     {
@@ -56,7 +57,9 @@ int main()
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     std::stringstream ss;
     ss << std::put_time(std::localtime(&in_time_t), "%Y%m%d-%H%M%S");
-    std::string filename = "results_" + ss.str() + ".csv";
+
+    std::filesystem::create_directory("out");
+    std::string filename = "out/results_" + ss.str() + ".csv";
 
     std::ofstream results_file(filename);
     std::stringstream header;

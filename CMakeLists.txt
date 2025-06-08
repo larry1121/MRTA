@@ -1,8 +1,10 @@
-cmake_minimum_required(VERSION 3.0.0)
-project(MRTA VERSION 0.1.0 LANGUAGES C CXX)
-set (CMAKE_CXX_STANDARD 14)
+cmake_minimum_required(VERSION 3.10)
+project(mrta_simulator)
 
-add_executable(MRTA main.cpp simulator.h simulator.cpp schedular.h schedular.cpp)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_executable(mrta_simulator main.cpp simulator.cpp schedular.cpp)
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
