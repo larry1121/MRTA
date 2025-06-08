@@ -83,6 +83,8 @@ private:
     int  tick_counter_ = 0;   // 틱 카운트
     bool has_started_assignments = false; // 100틱 이후 true
 
+    static constexpr int CLUSTER_SPLIT_ENABLE_TICK = 1500;
+
     // Robot_id -> goal_coord -> PathInfo
     std::map<int, std::map<Coord, PathInfo>> path_cache;
 
@@ -129,7 +131,7 @@ private:
     double DRONE_mid_priority_weight = 60.0;
     double DRONE_candidate_threshold = 0.005;
     int    DRONE_exploration_pause_start = 100;
-    int    DRONE_exploration_resume = 950;
+    int    DRONE_exploration_resume = 550;
 
     // Helper methods for task assignment triggers
     bool shouldTriggerReassignment(const set<Coord>& updated_coords,
@@ -282,8 +284,8 @@ private:
         const vector<vector<vector<int>>>& known_cost_map,
         const vector<vector<OBJECT>>& known_object_map);
 
-    static constexpr int UNKNOWN_COST_CATERPILLAR = 398;
-    static constexpr int UNKNOWN_COST_WHEEL = 846;
+    static constexpr int UNKNOWN_COST_CATERPILLAR = 300;
+    static constexpr int UNKNOWN_COST_WHEEL = 600;
 
     // 변하지 않는 helper
     static inline int default_unknown_cost(ROBOT::TYPE t)

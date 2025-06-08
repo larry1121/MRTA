@@ -65,7 +65,7 @@ int Scheduler::dijkstra(const Coord& start,
         pq.pop();
 
         // Early termination if cost exceeds 8000
-        if (current_cost_pq >= 6000) {
+        if (current_cost_pq >= 8000) {
             return std::numeric_limits<int>::max();
         }
 
@@ -1272,7 +1272,7 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<TASK>>& active_t
 
 
         /* 2-a) 배정 가능한 조합이 없다면 → split 후 재시도 --------------------- */
-        if (best_cluster_idx == -1)
+        /*if (best_cluster_idx == -1)
         {
             std::cout << "\n  ‼ no assignable cluster ― splitting ...\n";
 
@@ -1322,8 +1322,62 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<TASK>>& active_t
                 break;
             }
             /////////////////////
-            /* 핵심 수정 ① : 재평가 위해 루프 계속 */
+            // 핵심 수정 ① : 재평가 위해 루프 계속 
             continue;   // while 다시
+        }*/
+
+        if (best_cluster_idx == -1)
+        {
+            /* 아직 split 허용 시점이 아니라면 → 일단 루틴 종료 */
+            if (tick_counter_ < CLUSTER_SPLIT_ENABLE_TICK) {
+                std::cout << "  ↪ splitting is deferred until "
+                    << CLUSTER_SPLIT_ENABLE_TICK << " tick\n";
+                break;                // ← while 탈출·함수 종료. 다음 reassignment 때 재시도
+            }
+
+            std::cout << "\n  ‼ no assignable cluster ― splitting ...\n";
+
+            std::vector<int> to_split(unassigned_clusters.begin(),
+                unassigned_clusters.end());
+            unassigned_clusters.clear();
+
+            bool did_split = false;
+            for (int idx : to_split)
+            {
+                const TaskCluster& big = task_clusters[idx];
+
+                if (big.task_ids.size() == 1) {          // 이미 단일 → 다른 로봇으로는 진짜 불가
+                    continue;                            // (unassigned 에 다시 넣지 X)
+                }
+
+                /* 단일 태스크로 분해 */
+                for (int tid : big.task_ids) {
+                    TaskCluster single;
+                    single.task_ids = { tid };
+                    single.start_task_id = single.end_task_id = tid;
+
+                    /* 태스크 좌표 찾아 복사 */
+                    Coord t_coord;
+                    for (const auto& tp : active_tasks)
+                        if (tp->id == tid) { t_coord = tp->coord; break; }
+
+                    single.start_pos = single.end_pos = t_coord;
+                    single.total_cost = 0;               // 내부이동 0
+
+                    task_clusters.push_back(single);
+                    unassigned_clusters.insert((int)task_clusters.size() - 1);
+                    did_split = true;
+                    std::cout << "     ▸ created single-task cluster (T"
+                        << tid << ", idx " << task_clusters.size() - 1 << ")\n";
+                }
+            }
+
+            if (!did_split) {
+                std::cout << "  ↪ every cluster truly unassignable → giving up on them\n";
+                break;            // while 탈출 — 더 돌려도 소득이 없으니 종료
+            }
+
+            continue;             // split 성공 → 새 클러스터 대상으로 while 재진입
         }
 
 
