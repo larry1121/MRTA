@@ -26,14 +26,14 @@ int main()
     constexpr int WALL_DENSITY = 20;
     constexpr int TIME_MAX = MAP_SIZE * 100;
     constexpr int ROBOT_ENERGY = TIME_MAX * 6;
-    constexpr int NUM_RUNS_PER_PARAM = 5;
+    constexpr int NUM_RUNS_PER_PARAM = 2;
 
     std::vector<Hyperparameters> param_sets;
-    std::vector<int> cluster_dists = {1200, 1400, 1600};
+    std::vector<int> cluster_dists = {1200,1400,1600};
     std::vector<int> energy_margins = {10};
-    std::vector<int> max_cluster_sizes = {3, 4};
-    std::vector<int> drone_pauses = {100, 200, 300};
-    std::vector<int> drone_resumes = {550, 650, 750};
+    std::vector<int> max_cluster_sizes = {3,4};
+    std::vector<int> drone_pauses = {100,200,300};
+    std::vector<int> drone_resumes = {550,650,750};
 
     for (int cd : cluster_dists)
     {
@@ -59,7 +59,14 @@ int main()
     std::string filename = "results_" + ss.str() + ".csv";
 
     std::ofstream results_file(filename);
-    results_file << "ClusterDist,EnergyMargin,MaxClusterSize,DronePause,DroneResume,AvgCompletedTasks\n";
+    std::stringstream header;
+    header << "ClusterDist,EnergyMargin,MaxClusterSize,DronePause,DroneResume,";
+    for (int i = 1; i <= NUM_RUNS_PER_PARAM; ++i)
+    {
+        header << "Run" << i << "_Tasks,";
+    }
+    header << "AvgCompletedTasks\n";
+    results_file << header.str();
 
     double best_avg_completed_tasks = -1.0;
     Hyperparameters best_params;
@@ -74,6 +81,7 @@ int main()
                   << " DR=" << params.drone_resume << std::endl;
 
         long long total_completed_tasks_for_param = 0;
+        std::vector<int> run_results;
 
         for (int i = 0; i < NUM_RUNS_PER_PARAM; ++i)
         {
@@ -158,13 +166,19 @@ int main()
             }
             int completed_tasks = map.get_completed_task_num();
             total_completed_tasks_for_param += completed_tasks;
+            run_results.push_back(completed_tasks);
             std::cout << " completed tasks: " << completed_tasks << std::endl;
         }
 
         double avg_completed_tasks = static_cast<double>(total_completed_tasks_for_param) / NUM_RUNS_PER_PARAM;
 
         results_file << params.cluster_dist << "," << params.energy_margin << "," << params.max_cluster_size
-                     << "," << params.drone_pause << "," << params.drone_resume << "," << avg_completed_tasks << "\n";
+                     << "," << params.drone_pause << "," << params.drone_resume;
+        for (int result : run_results)
+        {
+            results_file << "," << result;
+        }
+        results_file << "," << avg_completed_tasks << "\n";
 
         if (avg_completed_tasks > best_avg_completed_tasks)
         {
