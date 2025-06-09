@@ -1457,9 +1457,9 @@ void Scheduler::performMinMinAssignment(const vector<shared_ptr<TASK>> &active_t
                           << " , total " << total_cost
                           << " , finish @ " << finish_time << '\n';
 
-                if (finish_time < best_finish_time)
+                if (total_cost < best_finish_time)
                 {
-                    best_finish_time = finish_time;
+                    best_finish_time = total_cost;
                     best_cluster_idx = cl_idx;
                     best_robot_id = rb.id;
                     task_clusters[cl_idx] = cluster; // ← 역순 결정 결과 반영
