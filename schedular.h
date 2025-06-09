@@ -79,14 +79,14 @@ public:
 
 private:
     // Constants for clustering and energy management
-    int CLUSTER_DISTANCE_THRESHOLD = 1400; // 클러스터링 거리 임계값
-    int ENERGY_MARGIN_PERCENT = 10;        // 에너지 여유 비율 (%)
+    int CLUSTER_DISTANCE_THRESHOLD = 1300; // 클러스터링 거리 임계값
+    int ENERGY_MARGIN_PERCENT = 8;        // 에너지 여유 비율 (%)
     int MAX_CLUSTER_SIZE = 3;              // 최대 클러스터 크기 (태스크 개수)
 
     int tick_counter_ = 0;                // 틱 카운트
     bool has_started_assignments = false; // 100틱 이후 true
 
-    static constexpr int CLUSTER_SPLIT_ENABLE_TICK = 1500;
+    static constexpr int CLUSTER_SPLIT_ENABLE_TICK = 1250;
 
     // Robot_id -> goal_coord -> PathInfo
     std::map<int, std::map<Coord, PathInfo>> path_cache;
@@ -136,8 +136,8 @@ private:
     double DRONE_high_priority_weight = 80.0;
     double DRONE_mid_priority_weight = 60.0;
     double DRONE_candidate_threshold = 0.005;
-    int DRONE_exploration_pause_start = 100;
-    int DRONE_exploration_resume = 550;
+    int DRONE_exploration_pause_start = 300;
+    int DRONE_exploration_resume = 650;
 
     // Helper methods for task assignment triggers
     bool shouldTriggerReassignment(const set<Coord> &updated_coords,
@@ -159,7 +159,7 @@ private:
                                        const std::vector<std::vector<OBJECT>> &);
 
     ROBOT::ACTION DRONE_get_direction(const Coord &, const Coord &);
-    bool DRONE_is_exploration_time() const;
+    bool DRONE_is_exploration_time(const vector<vector<vector<int>>>&) const;
 
     // Helper to convert action to coordinate change
     Coord action_to_delta(ROBOT::ACTION action)
