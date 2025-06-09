@@ -9,6 +9,15 @@
 #include <tuple>
 #include <cmath>
 
+int Scheduler::UNKNOWN_COST_CATERPILLAR = 300;
+int Scheduler::UNKNOWN_COST_WHEEL = 600;
+
+void Scheduler::set_unknown_costs(int caterpillar_cost, int wheel_cost)
+{
+    UNKNOWN_COST_CATERPILLAR = caterpillar_cost;
+    UNKNOWN_COST_WHEEL = wheel_cost;
+}
+
 // Helper for Dijkstra:
 // Using std::map for dist and parent for simplicity with Coord keys.
 // std::priority_queue typically needs a custom comparator for structs or pairs.
@@ -2742,10 +2751,9 @@ void Scheduler::set_hyperparameters(int cluster_dist, int energy_margin, int max
     DRONE_exploration_resume = drone_resume;
 }
 
-bool Scheduler::DRONE_is_exploration_time(const vector<vector<vector<int>>>& known_cost_map) const
+bool Scheduler::DRONE_is_exploration_time(const vector<vector<vector<int>>> &known_cost_map) const
 {
     int map_size_d = int(known_cost_map.size());
     return (tick_counter_ < DRONE_exploration_pause_start) ||
-           (tick_counter_ >= DRONE_exploration_resume && tick_counter_ <= map_size_d*57.5 - DRONE_exploration_pause_start+ DRONE_exploration_resume);
-
+           (tick_counter_ >= DRONE_exploration_resume && tick_counter_ <= map_size_d * 57.5 - DRONE_exploration_pause_start + DRONE_exploration_resume);
 }

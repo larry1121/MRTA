@@ -15,6 +15,8 @@ struct Hyperparameters
     int max_cluster_size;
     int drone_pause;
     int drone_resume;
+    int caterpillar_cost;
+    int wheel_cost;
 };
 
 int main()
@@ -29,23 +31,31 @@ int main()
     constexpr int NUM_RUNS_PER_PARAM = 2;
 
     std::vector<Hyperparameters> param_sets;
-    std::vector<int> cluster_dists = {1200,1400,1600};
+    std::vector<int> cluster_dists = {1200, 1400, 1600};
     std::vector<int> energy_margins = {10};
-    std::vector<int> max_cluster_sizes = {3,4};
-    std::vector<int> drone_pauses = {100,200,300};
-    std::vector<int> drone_resumes = {550,650,750};
+    std::vector<int> max_cluster_sizes = {3, 4};
+    std::vector<int> drone_pauses = {100, 200, 300};
+    std::vector<int> drone_resumes = {550, 650, 750};
+    std::vector<int> caterpillar_costs = {250, 300, 350};
+    std::vector<int> wheel_costs = {500, 650, 800};
 
-    for (int cd : cluster_dists)
+    for (int cat_cost : caterpillar_costs)
     {
-        for (int em : energy_margins)
+        for (int wheel_cost : wheel_costs)
         {
-            for (int mcs : max_cluster_sizes)
+            for (int cd : cluster_dists)
             {
-                for (int dp : drone_pauses)
+                for (int em : energy_margins)
                 {
-                    for (int dr : drone_resumes)
+                    for (int mcs : max_cluster_sizes)
                     {
-                        param_sets.push_back({cd, em, mcs, dp, dr});
+                        for (int dp : drone_pauses)
+                        {
+                            for (int dr : drone_resumes)
+                            {
+                                param_sets.push_back({cd, em, mcs, dp, dr, cat_cost, wheel_cost});
+                            }
+                        }
                     }
                 }
             }
@@ -60,7 +70,7 @@ int main()
 
     std::ofstream results_file(filename);
     std::stringstream header;
-    header << "ClusterDist,EnergyMargin,MaxClusterSize,DronePause,DroneResume,";
+    header << "CaterpillarCost,WheelCost,ClusterDist,EnergyMargin,MaxClusterSize,DronePause,DroneResume,";
     for (int i = 1; i <= NUM_RUNS_PER_PARAM; ++i)
     {
         header << "Run" << i << "_Tasks,";
@@ -76,7 +86,8 @@ int main()
     {
         set_count++;
         std::cout << "\n--- Running Simulation Set " << set_count << "/" << param_sets.size() << " ---\n";
-        std::cout << "Params: CD=" << params.cluster_dist << " EM=" << params.energy_margin
+        std::cout << "Params: CC=" << params.caterpillar_cost << " WC=" << params.wheel_cost
+                  << " CD=" << params.cluster_dist << " EM=" << params.energy_margin
                   << " MCS=" << params.max_cluster_size << " DP=" << params.drone_pause
                   << " DR=" << params.drone_resume << std::endl;
 
@@ -95,6 +106,7 @@ int main()
             auto &known_object_map = map.get_known_object_map();
             auto &active_tasks = map.get_active_tasks();
             Scheduler scheduler;
+            Scheduler::set_unknown_costs(params.caterpillar_cost, params.wheel_cost);
             scheduler.set_hyperparameters(params.cluster_dist, params.energy_margin, params.max_cluster_size, params.drone_pause, params.drone_resume);
             TASKDISPATCHER taskdispatcher(map, TIME_MAX);
 
@@ -172,7 +184,7 @@ int main()
 
         double avg_completed_tasks = static_cast<double>(total_completed_tasks_for_param) / NUM_RUNS_PER_PARAM;
 
-        results_file << params.cluster_dist << "," << params.energy_margin << "," << params.max_cluster_size
+        results_file << params.caterpillar_cost << "," << params.wheel_cost << "," << params.cluster_dist << "," << params.energy_margin << "," << params.max_cluster_size
                      << "," << params.drone_pause << "," << params.drone_resume;
         for (int result : run_results)
         {
@@ -191,6 +203,8 @@ int main()
     results_file.close();
 
     cout << "\n\n==================== Best Parameters Found ====================\n";
+    cout << "Caterpillar Cost: " << best_params.caterpillar_cost << "\n";
+    cout << "Wheel Cost: " << best_params.wheel_cost << "\n";
     cout << "Cluster Distance Threshold: " << best_params.cluster_dist << "\n";
     cout << "Energy Margin Percent: " << best_params.energy_margin << "\n";
     cout << "Max Cluster Size: " << best_params.max_cluster_size << "\n";

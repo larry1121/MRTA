@@ -52,6 +52,7 @@ class Scheduler
 {
 public:
     void set_hyperparameters(int cluster_dist, int energy_margin, int max_cluster_size, int drone_pause, int drone_resume);
+    static void set_unknown_costs(int caterpillar_cost, int wheel_cost);
     void on_info_updated(const set<Coord> &observed_coords,
                          const set<Coord> &updated_coords,
                          const vector<vector<vector<int>>> &known_cost_map,
@@ -80,7 +81,7 @@ public:
 private:
     // Constants for clustering and energy management
     int CLUSTER_DISTANCE_THRESHOLD = 1300; // 클러스터링 거리 임계값
-    int ENERGY_MARGIN_PERCENT = 8;        // 에너지 여유 비율 (%)
+    int ENERGY_MARGIN_PERCENT = 8;         // 에너지 여유 비율 (%)
     int MAX_CLUSTER_SIZE = 3;              // 최대 클러스터 크기 (태스크 개수)
 
     int tick_counter_ = 0;                // 틱 카운트
@@ -159,7 +160,7 @@ private:
                                        const std::vector<std::vector<OBJECT>> &);
 
     ROBOT::ACTION DRONE_get_direction(const Coord &, const Coord &);
-    bool DRONE_is_exploration_time(const vector<vector<vector<int>>>&) const;
+    bool DRONE_is_exploration_time(const vector<vector<vector<int>>> &) const;
 
     // Helper to convert action to coordinate change
     Coord action_to_delta(ROBOT::ACTION action)
@@ -302,8 +303,8 @@ private:
                           const vector<vector<vector<int>>> &known_cost_map,
                           const vector<vector<OBJECT>> &known_object_map);
 
-    static constexpr int UNKNOWN_COST_CATERPILLAR = 300;
-    static constexpr int UNKNOWN_COST_WHEEL = 600;
+    static int UNKNOWN_COST_CATERPILLAR;
+    static int UNKNOWN_COST_WHEEL;
 
     // 변하지 않는 helper
     static inline int default_unknown_cost(ROBOT::TYPE t)
