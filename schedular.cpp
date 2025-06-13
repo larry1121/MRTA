@@ -268,7 +268,7 @@ void Scheduler::on_info_updated(const set<Coord> &observed_coords,
                 }
 
             /* 재탐색 후보가 없고 pause 종료전이라면 그대로 HOLD */
-            if (cand.empty() && DRONE_is_exploration_time() == false) {
+            if (cand.empty() && DRONE_is_exploration_time(known_cost_map) == false) {
                 DRONE_drone_paths[rid].clear();
                 DRONE_drone_targets[rid] = pos;
                 continue;
@@ -616,7 +616,7 @@ ROBOT::ACTION Scheduler::idle_action(const set<Coord> &observed_coords,
                                      const ROBOT &robot)
 {
     if (robot.type == ROBOT::TYPE::DRONE) {
-        if (!DRONE_is_exploration_time()) return ROBOT::ACTION::HOLD;
+        if (!DRONE_is_exploration_time(known_cost_map)) return ROBOT::ACTION::HOLD;
         int rid = robot.id; Coord pos = robot.get_coord();
         if (DRONE_drone_paths.count(rid) && !DRONE_drone_paths[rid].empty()) {
             if (DRONE_coord_equal(pos, DRONE_drone_paths[rid].front()))
@@ -2421,8 +2421,9 @@ ROBOT::ACTION Scheduler::DRONE_get_direction(const Coord& from, const Coord& to)
     if (dx == 1 && dy == 0)  return ROBOT::ACTION::RIGHT;
     return ROBOT::ACTION::HOLD;
 }
-bool Scheduler::DRONE_is_exploration_time() const
+bool Scheduler::DRONE_is_exploration_time(const vector<vector<vector<int>>>& known_cost_map) const
 {
+    int map_size_d = int(known_cost_map.size());
     return (tick_counter_ < DRONE_exploration_pause_start) ||
-        (tick_counter_ >= DRONE_exploration_resume);
+        (tick_counter_ >= DRONE_exploration_resume && tick_counter_ <= map_size_d * 57.5 - DRONE_exploration_pause_start + DRONE_exploration_resume);
 }

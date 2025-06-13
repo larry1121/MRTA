@@ -76,14 +76,14 @@ public:
 
 private:
     // Constants for clustering and energy management
-    const int CLUSTER_DISTANCE_THRESHOLD = 1400;  // 클러스터링 거리 임계값
-    const int ENERGY_MARGIN_PERCENT = 10;         // 에너지 여유 비율 (%)
+    const int CLUSTER_DISTANCE_THRESHOLD = 1200;  // 클러스터링 거리 임계값
+    const int ENERGY_MARGIN_PERCENT = 6;         // 에너지 여유 비율 (%)
     const int MAX_CLUSTER_SIZE = 3;              // 최대 클러스터 크기 (태스크 개수)
 
     int  tick_counter_ = 0;   // 틱 카운트
     bool has_started_assignments = false; // 100틱 이후 true
 
-    static constexpr int CLUSTER_SPLIT_ENABLE_TICK = 1500;
+    static constexpr int CLUSTER_SPLIT_ENABLE_TICK = 1250;
 
     // Robot_id -> goal_coord -> PathInfo
     std::map<int, std::map<Coord, PathInfo>> path_cache;
@@ -153,7 +153,7 @@ private:
         const std::vector<std::vector<OBJECT>>&);
 
     ROBOT::ACTION DRONE_get_direction(const Coord&, const Coord&);
-    bool  DRONE_is_exploration_time() const;
+    bool  DRONE_is_exploration_time(const vector<vector<vector<int>>>&) const;
 
     // Helper to convert action to coordinate change
     Coord action_to_delta(ROBOT::ACTION action) {
@@ -284,8 +284,8 @@ private:
         const vector<vector<vector<int>>>& known_cost_map,
         const vector<vector<OBJECT>>& known_object_map);
 
-    static constexpr int UNKNOWN_COST_CATERPILLAR = 300;
-    static constexpr int UNKNOWN_COST_WHEEL = 600;
+    static constexpr int UNKNOWN_COST_CATERPILLAR = 250;
+    static constexpr int UNKNOWN_COST_WHEEL = 500;
 
     // 변하지 않는 helper
     static inline int default_unknown_cost(ROBOT::TYPE t)
