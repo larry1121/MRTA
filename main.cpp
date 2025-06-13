@@ -31,13 +31,13 @@ int main()
     constexpr int NUM_RUNS_PER_PARAM = 3;
 
     std::vector<Hyperparameters> param_sets;
-    std::vector<int> cluster_dists = {1200};
+    std::vector<int> cluster_dists = {1000, 1200};
     std::vector<int> energy_margins = {6};
     std::vector<int> max_cluster_sizes = {3};
-    std::vector<int> drone_pauses = {100, 200};
-    std::vector<int> drone_resumes = {550, 650, 750};
-    std::vector<int> caterpillar_costs = {250, 300, 350};
-    std::vector<int> wheel_costs = {500, 650, 800};
+    std::vector<int> drone_pauses = {100};
+    std::vector<int> drone_resumes = {550};
+    std::vector<int> caterpillar_costs = {250};
+    std::vector<int> wheel_costs = {400, 450, 500};
 
     for (int cat_cost : caterpillar_costs)
     {
